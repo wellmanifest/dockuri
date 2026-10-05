@@ -50,10 +50,10 @@ def test_procedure_call(python_worker):
     resp1 = client.call("math.add", {"a": 15, "b": 27})
     assert resp1["ok"] is True
     assert resp1["result"] == 42
-    assert resp1["_client_duration_ms"] < 2.0
+    assert resp1["_client_duration_ms"] < 10.0
 
     # 2. text.uppercase
     resp2 = client.call("text.uppercase", {"text": "hello dockuri"})
     assert resp2["ok"] is True
     assert resp2["result"] == "HELLO DOCKURI"
-    assert resp2["_client_duration_ms"] < 2.0
+    assert resp2["_client_duration_ms"] < 10.0

@@ -103,3 +103,18 @@ Każdy zgodny worker Dockuri **musi** implementować wbudowaną procedurę syste
 }
 ```
 2. Wynik wykonania całego potoku jest autoryzowany jednym kwitem wykonania (**CompositeExecutionReceipt**) zawierającym skróty kryptograficzne każdego etapu bez narzutu dyskowego $O(1)$.
+
+### `DOCK-REG-001: Procedure Registry Discovery & Content-Addressed Indexing`
+1. Rejestr procedur Dockuri (`dockuri_registry.py`) indeksuje wszystkie deklaracje `dockuri.json` w workspace w sposób statyczny i deterministyczny:
+   * **Adresowalność kanoniczna**: Każda procedura otrzymuje niezmienny identyfikator URI `proc://<app>/<proc_path>/<version>`.
+   * **Skrót kontraktu (`contract_digest`)**: Deterministyczny hash SHA-256 z kanonicznego JSON schematu i metadanych procedury. Zmiana parametrów powoduje unieważnienie skrótu i odświeżenie indeksu.
+   * **Brak efektów ubocznych przy indeksacji**: Skaner odczytuje wyłącznie pliki JSON/YAML; nie wykonuje kodu projektu, nie uruchamia procesów potomnych.
+
+### `DOCK-NL-001: Semantic Retrieval & Constrained NL Pipeline Synthesis`
+Integracja poleceń w języku naturalnym (NL Control Command) z rejestrem procedur Dockuri przebiega w 3-etapowym cyklu:
+1. **Dwuetapowa projekcja kandydatów (Candidate Projection)**:
+   * Wyszukiwarka rejestru filtruje zbiór tysięcy procedur za pomocą hybrydowego wyszukiwania leksykalno-semantycznego (FTS5 + embeddings) i wybiera wyłącznie ograniczony zbiór Top-K (np. 5–8) kandydatów pasujących do polecenia NL.
+2. **Gramatyka sterowana (Constrained Generation)**:
+   * Wybrani kandydaci są rzutowani na format narzędzi LLM (OpenAI Tool Calls / MCP) lub gramatykę GBNF (`root ::= "{" "proc": ... "args": ... "}"`), uniemożliwiając modelowi wygenerowanie nieistniejących parametrów lub halucynowanych URI.
+3. **Kompilacja do potoku wykonawczego**:
+   * Model syntetyzuje deklaratywny plan potoku (`wellmanifest.nl-plan/v1`), który jest natychmiastowo przekazywany do silnika wykonawczego `dockuri_client.py` i wykonywany przez gorące demony UDS w czasie poniżej 1–2 ms.
