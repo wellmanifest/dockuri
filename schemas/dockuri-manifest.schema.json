@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wellmanifest.org/schemas/dockuri-manifest.schema.json",
+  "title": "Wellmanifest Dockuri Manifest Schema",
+  "description": "Standard schema for Dockuri procedure export, IPC transports, and zero-cold-start execution profiles.",
+  "type": "object",
+  "required": ["app", "version", "transport", "procedures"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "app": {
+      "type": "string",
+      "pattern": "^[a-z0-9_-]+$",
+      "description": "Unique identifier of the application or service exporting procedures."
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[a-zA-Z0-9.]+)?$",
+      "description": "Semver version string of the service."
+    },
+    "description": {
+      "type": "string",
+      "description": "Human-readable description of exported functions."
+    },
+    "transport": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["uds", "stdio", "http", "native"],
+          "description": "Primary IPC transport mechanism."
+        },
+        "socket": {
+          "type": "string",
+          "description": "Absolute or relative path to the Unix Domain Socket."
+        },
+        "auto_spawn": {
+          "type": "boolean",
+          "default": false,
+          "description": "Whether orchestrator can auto-spawn daemon if socket is missing."
+        },
+        "spawn_cmd": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Command line args to spawn resident worker daemon."
+        },
+        "fallback": {
+          "type": "string",
+          "enum": ["native", "http", "none"],
+          "default": "none",
+          "description": "Secondary execution mode if daemon is unavailable."
+        },
+        "fallback_url": {
+          "type": "string",
+          "format": "uri",
+          "description": "HTTP endpoint URL for fallback execution."
+        }
+      }
+    },
+    "shm": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "dir": { "type": "string", "default": "/dev/shm/dockuri" },
+        "threshold_bytes": { "type": "integer", "default": 65536 }
+      }
+    },
+    "procedures": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["effect"],
+        "additionalProperties": false,
+        "properties": {
+          "description": { "type": "string" },
+          "effect": {
+            "type": "string",
+            "enum": ["pure", "idempotent", "mutating"],
+            "description": "Purity and side-effect contract of the procedure."
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1000
+          },
+          "shm_supported": {
+            "type": "boolean",
+            "default": false
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "input": { "type": "object" },
+              "output": { "type": "object" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

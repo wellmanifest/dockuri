@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wellmanifest-dockuri"
+version = "0.1.0"
+description = "Wellmanifest standard for zero-cold-start URI function invocation, fast IPC, and pipeline chaining"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Wellmanifest Authors" }]
+dependencies = [
+    "jsonschema>=4.0.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=7.0.0",
+]
+
+[project.scripts]
+dockuri-check = "src.dockuri_check:main"
