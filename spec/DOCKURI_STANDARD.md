@@ -118,3 +118,44 @@ Integracja poleceń w języku naturalnym (NL Control Command) z rejestrem proced
    * Wybrani kandydaci są rzutowani na format narzędzi LLM (OpenAI Tool Calls / MCP) lub gramatykę GBNF (`root ::= "{" "proc": ... "args": ... "}"`), uniemożliwiając modelowi wygenerowanie nieistniejących parametrów lub halucynowanych URI.
 3. **Kompilacja do potoku wykonawczego**:
    * Model syntetyzuje deklaratywny plan potoku (`wellmanifest.nl-plan/v1`), który jest natychmiastowo przekazywany do silnika wykonawczego `dockuri_client.py` i wykonywany przez gorące demony UDS w czasie poniżej 1–2 ms.
+
+### `DOCK-FLOW-001: Workflow DAG and Data Flow Standard (dockuri/workflow-v1)`
+Końcowym standardem zapisu potoku wygenerowanego przez model LLM lub operatora jest schemat **`dockuri/workflow-v1`** ([`schemas/dockuri-pipeline.schema.json`](../schemas/dockuri-pipeline.schema.json)):
+
+```json
+{
+  "$schema": "https://wellmanifest.org/schemas/dockuri-pipeline-v1.json",
+  "name": "verify_and_digest_version_artifact",
+  "max_parallel": 4,
+  "flow": [
+    {
+      "id": "step1_read_file",
+      "uri": "proc://urirun-connector-fs/fs/read_text/v1",
+      "input": { "path": "/path/to/VERSION" }
+    },
+    {
+      "id": "step2_encode_b64",
+      "uri": "proc://urirun-connector-base64/base64/encode/v1",
+      "depends_on": ["step1_read_file"],
+      "input": {
+        "text": { "$from": "step1_read_file", "path": "/content" }
+      }
+    },
+    {
+      "id": "step3_classify",
+      "uri": "proc://curi/curi/classify_uri/v1",
+      "depends_on": ["step2_encode_b64"],
+      "input": { "uri": "fs://host/file/query/version" }
+    }
+  ]
+}
+```
+
+#### Wymagania normatywne przepływu danych:
+1. **Identyfikacja etapów (`id`)**: Każdy etap musi posiadać unikalny w skali grafu identyfikator dopasowany do wzorca `^[a-zA-Z0-9_-]+$`.
+2. **Kierunek przepływu danych (`$from`)**: Odwołania do wyników poprzednich etapów realizowane są ściśle za pomocą standardu **RFC 6901 JSON Pointer** ze strukturą:
+   `{"$from": "<poprzedni_krok>", "path": "/ścieżka/do/pola"}`.
+3. **Jawność zależności (`depends_on`)**: Każde użycie referencji `{"$from": "stepA", ...}` **musi** być zadeklarowane w tablicy `depends_on: ["stepA"]`.
+4. **Weryfikacja acykliczności DAG**: Przed wykonaniem orkiestrator sprawdza graf algorytmem Kahna. Wykrycie cyklu zatrzymuje wykonanie ze statusem błędu (*fail-closed*).
+5. **Kwit kryptograficzny**: Każdy krok generuje hash stanu pośredniego, a po zakończeniu emitowany jest jeden zbiorczy kwit `CompositeExecutionReceipt` (`wellmanifest.wellman/receipt/v1`).
+
