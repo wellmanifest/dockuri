@@ -61,25 +61,54 @@ class ProcedureRecord:
         }
 
 
+EXCLUDED_DIRS = {
+    ".git", ".hg", ".svn", "node_modules", "venv", ".venv", "target",
+    "dist", "build", ".pytest_cache", ".cache", ".idea", ".vscode",
+    ".worktrees", ".subactor", ".code2llm_cache", "logs", "conversations"
+}
+
+
 class DockuriRegistry:
     def __init__(self):
         self.procedures: dict[str, ProcedureRecord] = {}
 
     def scan_path(self, root_dir: str | Path) -> int:
-        """Scan a directory recursively for dockuri.json files and register procedures."""
+        """Fast pruned scan for dockuri.json, connector.manifest.json, and apx.yaml."""
         root = Path(root_dir)
         count = 0
-        for manifest_file in root.rglob("dockuri.json"):
-            # Skip hidden folders, venvs, git
-            parts = manifest_file.parts
-            if any(p.startswith(".") or p in ("venv", "node_modules", "target") for p in parts[:-1]):
-                continue
-            try:
-                with open(manifest_file, "r", encoding="utf-8") as f:
-                    manifest = json.load(f)
-                count += self.register_manifest(manifest, str(manifest_file))
-            except Exception as e:
-                print(f"Warning: Failed to parse {manifest_file}: {e}")
+
+        for dirpath, dirnames, filenames in os.walk(root):
+            # Prune excluded directories in-place so os.walk skips them entirely
+            dirnames[:] = [d for d in dirnames if d not in EXCLUDED_DIRS and not d.startswith(".")]
+
+            # 1. Native dockuri.json
+            if "dockuri.json" in filenames:
+                f_path = Path(dirpath) / "dockuri.json"
+                try:
+                    with open(f_path, "r", encoding="utf-8") as f:
+                        count += self.register_manifest(json.load(f), str(f_path))
+                except Exception as e:
+                    pass
+
+            # 2. urirun connector.manifest.json
+            elif "connector.manifest.json" in filenames:
+                f_path = Path(dirpath) / "connector.manifest.json"
+                try:
+                    with open(f_path, "r", encoding="utf-8") as f:
+                        count += self.register_connector_manifest(json.load(f), str(f_path))
+                except Exception as e:
+                    pass
+
+            # 3. apx.yaml
+            elif "apx.yaml" in filenames:
+                f_path = Path(dirpath) / "apx.yaml"
+                try:
+                    import yaml
+                    with open(f_path, "r", encoding="utf-8") as f:
+                        count += self.register_apx_manifest(yaml.safe_load(f), str(f_path))
+                except Exception:
+                    pass
+
         return count
 
     def register_manifest(self, manifest: dict[str, Any], file_path: str) -> int:
@@ -89,7 +118,6 @@ class DockuriRegistry:
         count = 0
 
         for proc_name, defn in procs.items():
-            # Canonical URI: proc://<app>/<proc_name>/v1
             uri = f"proc://{app}/{proc_name.replace('.', '/')}/v1"
             record = ProcedureRecord(
                 app=app,
@@ -99,6 +127,66 @@ class DockuriRegistry:
                 effect=defn.get("effect", "pure"),
                 transport=transport,
                 schema=defn.get("schema", {}),
+                manifest_path=file_path,
+            )
+            self.procedures[proc_name] = record
+            count += 1
+        return count
+
+    def register_connector_manifest(self, data: dict[str, Any], file_path: str) -> int:
+        """Adapt a urirun connector.manifest.json into canonical ProcedureRecords."""
+        app = data.get("id") or data.get("name", "connector")
+        routes = data.get("routes", [])
+        summary = data.get("summary") or data.get("description", "")
+        count = 0
+
+        for route in routes:
+            # Route e.g. pdf://markdown/command/render
+            parts = route.split("://")[-1].strip("/").split("/")
+            proc_sub = "_".join(parts) if parts else "invoke"
+            proc_name = f"{app}.{proc_sub}"
+            uri = f"proc://{app}/{'/'.join(parts)}/v1"
+            effect = "mutating" if "/command/" in route else "pure"
+
+            # Derive input schema from examples if present
+            input_schema = {"type": "object", "properties": {}}
+            for ex in data.get("examples", []):
+                if ex.get("uri") == route and "payload" in ex:
+                    props = {k: {"type": "string" if isinstance(v, str) else "number"} for k, v in ex["payload"].items()}
+                    input_schema = {"type": "object", "properties": props}
+                    break
+
+            record = ProcedureRecord(
+                app=app,
+                proc=proc_name,
+                uri=uri,
+                desc=f"[{app}] {summary} (Route: {route})",
+                effect=effect,
+                transport={"type": "uds", "socket": f"/tmp/dockuri_{app}.sock"},
+                schema={"input": input_schema, "output": {"type": "object"}},
+                manifest_path=file_path,
+            )
+            self.procedures[proc_name] = record
+            count += 1
+        return count
+
+    def register_apx_manifest(self, data: dict[str, Any], file_path: str) -> int:
+        """Adapt an apx.yaml into canonical ProcedureRecords."""
+        app = data.get("name") or data.get("id", "app")
+        actions = data.get("actions", [])
+        count = 0
+        for act in actions:
+            act_id = act.get("id", "action")
+            proc_name = f"{app}.{act_id}"
+            uri = f"proc://{app}/{act_id}/v1"
+            record = ProcedureRecord(
+                app=app,
+                proc=proc_name,
+                uri=uri,
+                desc=act.get("description", f"Action {act_id} in {app}"),
+                effect="mutating" if act.get("mutates", False) else "pure",
+                transport={"type": "uds", "socket": f"/tmp/dockuri_{app}.sock"},
+                schema={"input": {"type": "object"}, "output": {"type": "object"}},
                 manifest_path=file_path,
             )
             self.procedures[proc_name] = record

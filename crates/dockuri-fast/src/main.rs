@@ -49,10 +49,28 @@ struct IndexedProcedure {
     manifest_path: PathBuf,
 }
 
+#[derive(Debug, Deserialize)]
+struct ConnectorManifest {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    summary: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    routes: Vec<String>,
+}
+
 fn is_excluded(entry: &DirEntry) -> bool {
-    if entry.file_type().is_dir() {
+    let ft = entry.file_type();
+    if ft.is_symlink() {
+        return true;
+    }
+    if ft.is_dir() {
         let name = entry.file_name().to_string_lossy();
-        if EXCLUDED.iter().any(|&ex| ex == name) {
+        if (entry.depth() > 0 && name.starts_with('.')) || EXCLUDED.iter().any(|&ex| ex == name) {
             return true;
         }
     }
@@ -66,31 +84,69 @@ fn scan_directory<P: AsRef<Path>>(root: P) -> (Vec<IndexedProcedure>, usize) {
     let walker = WalkDir::new(root).into_iter().filter_entry(|e| !is_excluded(e));
 
     for entry in walker.filter_map(Result::ok) {
-        if entry.file_name() == "dockuri.json" && entry.file_type().is_file() {
-            manifests_found += 1;
-            let path = entry.into_path();
-            if let Ok(file) = File::open(&path) {
-                let reader = BufReader::new(file);
-                if let Ok(manifest) = serde_json::from_reader::<_, Manifest>(reader) {
-                    for (proc_name, def) in manifest.procedures {
-                        let uri = format!("proc://{}/{}/v1", manifest.app, proc_name.replace('.', "/"));
-                        
-                        let mut hasher = Sha256::new();
-                        hasher.update(uri.as_bytes());
-                        hasher.update(def.description.as_bytes());
-                        hasher.update(def.effect.as_bytes());
-                        let hash_bytes = hasher.finalize();
-                        let digest = hash_bytes.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+        let fname = entry.file_name().to_string_lossy();
+        if entry.file_type().is_file() {
+            if fname == "dockuri.json" {
+                manifests_found += 1;
+                let path = entry.into_path();
+                if let Ok(file) = File::open(&path) {
+                    let reader = BufReader::new(file);
+                    if let Ok(manifest) = serde_json::from_reader::<_, Manifest>(reader) {
+                        for (proc_name, def) in manifest.procedures {
+                            let uri = format!("proc://{}/{}/v1", manifest.app, proc_name.replace('.', "/"));
+                            
+                            let mut hasher = Sha256::new();
+                            hasher.update(uri.as_bytes());
+                            hasher.update(def.description.as_bytes());
+                            hasher.update(def.effect.as_bytes());
+                            let hash_bytes = hasher.finalize();
+                            let digest = hash_bytes.iter().map(|b| format!("{:02x}", b)).collect::<String>();
 
-                        procs.push(IndexedProcedure {
-                            app: manifest.app.clone(),
-                            proc_name,
-                            uri,
-                            desc: def.description,
-                            effect: def.effect,
-                            contract_digest: digest,
-                            manifest_path: path.clone(),
-                        });
+                            procs.push(IndexedProcedure {
+                                app: manifest.app.clone(),
+                                proc_name,
+                                uri,
+                                desc: def.description,
+                                effect: def.effect,
+                                contract_digest: digest,
+                                manifest_path: path.clone(),
+                            });
+                        }
+                    }
+                }
+            } else if fname == "connector.manifest.json" {
+                manifests_found += 1;
+                let path = entry.into_path();
+                if let Ok(file) = File::open(&path) {
+                    let reader = BufReader::new(file);
+                    if let Ok(manifest) = serde_json::from_reader::<_, ConnectorManifest>(reader) {
+                        let app = manifest.id.or(manifest.name).unwrap_or_else(|| "connector".to_string());
+                        let desc = if !manifest.summary.is_empty() { manifest.summary } else { manifest.description };
+
+                        for route in manifest.routes {
+                            let route_clean = route.split("://").last().unwrap_or("").trim_matches('/');
+                            let proc_sub = route_clean.replace('/', "_");
+                            let proc_name = format!("{}.{}", app, proc_sub);
+                            let uri = format!("proc://{}/{}/v1", app, route_clean);
+                            let effect = if route.contains("/command/") { "mutating".to_string() } else { "pure".to_string() };
+
+                            let mut hasher = Sha256::new();
+                            hasher.update(uri.as_bytes());
+                            hasher.update(desc.as_bytes());
+                            hasher.update(effect.as_bytes());
+                            let hash_bytes = hasher.finalize();
+                            let digest = hash_bytes.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+
+                            procs.push(IndexedProcedure {
+                                app: app.clone(),
+                                proc_name,
+                                uri,
+                                desc: format!("[{app}] {desc}"),
+                                effect,
+                                contract_digest: digest,
+                                manifest_path: path.clone(),
+                            });
+                        }
                     }
                 }
             }
