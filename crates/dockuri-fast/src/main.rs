@@ -38,6 +38,57 @@ struct Manifest {
     procedures: HashMap<String, ProcedureDef>,
 }
 
+#[derive(Debug, Deserialize)]
+struct SingleProcManifest {
+    #[serde(default)]
+    format: Option<String>,
+    uri: String,
+    #[serde(default)]
+    desc: String,
+    #[serde(default)]
+    effects: Vec<String>,
+}
+
+fn parse_yaml_proc(content: &str) -> Option<(String, String, String, String, String)> {
+    let mut uri = None;
+    let mut desc = None;
+    let mut effect = "pure".to_string();
+
+    let mut in_effects = false;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("uri:") {
+            in_effects = false;
+            let val = trimmed["uri:".len()..].trim().trim_matches(|c| c == '"' || c == '\'');
+            uri = Some(val.to_string());
+        } else if trimmed.starts_with("desc:") {
+            in_effects = false;
+            let val = trimmed["desc:".len()..].trim().trim_matches(|c| c == '"' || c == '\'');
+            desc = Some(val.to_string());
+        } else if trimmed.starts_with("effects:") {
+            in_effects = true;
+        } else if in_effects && trimmed.starts_with("- ") {
+            let eff = trimmed["- ".len()..].trim().trim_matches(|c| c == '"' || c == '\'');
+            if !eff.is_empty() {
+                effect = eff.to_string();
+                in_effects = false;
+            }
+        } else if !trimmed.starts_with('#') && !trimmed.is_empty() && !trimmed.starts_with('-') {
+            in_effects = false;
+        }
+    }
+
+    if let Some(u) = uri {
+        let parts: Vec<&str> = u.trim_start_matches("proc://").split('/').collect();
+        let app = if parts.len() >= 2 { parts[1].to_string() } else { "app".to_string() };
+        let proc_name = if parts.len() >= 3 { parts[2].to_string() } else { "main".to_string() };
+        let d = desc.unwrap_or_else(|| proc_name.clone());
+        Some((app, proc_name, u, d, effect))
+    } else {
+        None
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct IndexedProcedure {
     app: String,
@@ -86,12 +137,36 @@ fn scan_directory<P: AsRef<Path>>(root: P) -> (Vec<IndexedProcedure>, usize) {
     for entry in walker.filter_map(Result::ok) {
         let fname = entry.file_name().to_string_lossy();
         if entry.file_type().is_file() {
-            if fname == "dockuri.json" {
+            let is_dockuri_json = fname == "dockuri.json" || fname.ends_with(".proc.json");
+            let is_proc_yaml = fname == "dockuri.proc.yaml" || fname == "proc.yaml" || fname.ends_with(".proc.yaml") || fname.ends_with(".proc.yml");
+
+            if is_dockuri_json {
                 manifests_found += 1;
                 let path = entry.into_path();
-                if let Ok(file) = File::open(&path) {
-                    let reader = BufReader::new(file);
-                    if let Ok(manifest) = serde_json::from_reader::<_, Manifest>(reader) {
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    if let Ok(single) = serde_json::from_str::<SingleProcManifest>(&content) {
+                        let parts: Vec<&str> = single.uri.trim_start_matches("proc://").split('/').collect();
+                        let app = if parts.len() >= 2 { parts[1].to_string() } else { "app".to_string() };
+                        let proc_name = if parts.len() >= 3 { parts[2].to_string() } else { "main".to_string() };
+                        let effect = single.effects.first().cloned().unwrap_or_else(|| "pure".to_string());
+
+                        let mut hasher = Sha256::new();
+                        hasher.update(single.uri.as_bytes());
+                        hasher.update(single.desc.as_bytes());
+                        hasher.update(effect.as_bytes());
+                        let hash_bytes = hasher.finalize();
+                        let digest = hash_bytes.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+
+                        procs.push(IndexedProcedure {
+                            app,
+                            proc_name,
+                            uri: single.uri,
+                            desc: single.desc,
+                            effect,
+                            contract_digest: digest,
+                            manifest_path: path.clone(),
+                        });
+                    } else if let Ok(manifest) = serde_json::from_str::<Manifest>(&content) {
                         for (proc_name, def) in manifest.procedures {
                             let uri = format!("proc://{}/{}/v1", manifest.app, proc_name.replace('.', "/"));
                             
@@ -112,6 +187,29 @@ fn scan_directory<P: AsRef<Path>>(root: P) -> (Vec<IndexedProcedure>, usize) {
                                 manifest_path: path.clone(),
                             });
                         }
+                    }
+                }
+            } else if is_proc_yaml {
+                manifests_found += 1;
+                let path = entry.into_path();
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    if let Some((app, proc_name, uri, desc, effect)) = parse_yaml_proc(&content) {
+                        let mut hasher = Sha256::new();
+                        hasher.update(uri.as_bytes());
+                        hasher.update(desc.as_bytes());
+                        hasher.update(effect.as_bytes());
+                        let hash_bytes = hasher.finalize();
+                        let digest = hash_bytes.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+
+                        procs.push(IndexedProcedure {
+                            app,
+                            proc_name,
+                            uri,
+                            desc,
+                            effect,
+                            contract_digest: digest,
+                            manifest_path: path.clone(),
+                        });
                     }
                 }
             } else if fname == "connector.manifest.json" {
