@@ -1,0 +1,496 @@
+#!/usr/bin/env python3
+"""Dockuri Model Context Protocol (MCP) Server (DOCK-MCP-001).
+
+Exposes Dockuri's fast URI execution engine to LLMs (Google Gemini / Antigravity,
+Claude, OpenAI Codex) via JSON-RPC 2.0 over stdio.
+
+Tools:
+- dockuri_execute_sentence: Dispatch and execute any NL sentence on any dockuri project.
+- dockuri_call_uri: Direct fast URI process invocation (uri / uri_jsonl).
+- dockuri_search_procedures: Semantic & lexical search across the workspace.
+- dockuri_list_projects: Inspect all runnable projects in the workspace.
+- dockuri_manage_process: Lifecycle management (generate, modify, relocate, snippet).
+- dockuri_check_conformance: Enforce DOCK-STD-001 & latency budget (< 15ms).
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+import time
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional
+
+try:
+    from .dockuri_check import (
+        check_sentence_dispatch,
+        check_uri_standard_conformance,
+        inspect_project_dockuri_readiness,
+    )
+    from .dockuri_client import render_uri_call_snippet, uri, uri_jsonl
+    from .dockuri_registry import DockuriRegistry
+except ImportError:
+    from dockuri_check import (  # type: ignore
+        check_sentence_dispatch,
+        check_uri_standard_conformance,
+        inspect_project_dockuri_readiness,
+    )
+    from dockuri_client import render_uri_call_snippet, uri, uri_jsonl  # type: ignore
+    from dockuri_registry import DockuriRegistry  # type: ignore
+
+
+MCP_TOOLS_SPEC: List[Dict[str, Any]] = [
+    {
+        "name": "dockuri_execute_sentence",
+        "description": (
+            "Execute any natural language sentence or instruction against any project "
+            "runnable via Dockuri using the ultra-fast URI process engine (DOCK-DISP-001, DOCK-ACC-001)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "sentence": {
+                    "type": "string",
+                    "description": "Task or instruction in plain Polish or English (e.g. 'zdeduplikuj zadania w sprincie', 'uruchom audyt')",
+                },
+                "project": {
+                    "type": "string",
+                    "description": "Absolute path to the target project (defaults to current working directory)",
+                },
+                "payload": {
+                    "type": "object",
+                    "description": "Optional parameters or arguments dictionary for execution",
+                },
+                "dry_run": {
+                    "type": "boolean",
+                    "description": "If true, simulates dispatch without mutating state",
+                    "default": False,
+                },
+            },
+            "required": ["sentence"],
+        },
+    },
+    {
+        "name": "dockuri_call_uri",
+        "description": "Call any registered Dockuri URI process directly with payload or streaming JSONL (DOCK-URI-001).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "uri": {
+                    "type": "string",
+                    "description": "Full canonical URI (e.g. 'proc://system/sprint/deduplicate/v1', 'willman://operation/dockuri/v1')",
+                },
+                "payload": {
+                    "type": "object",
+                    "description": "JSON arguments or payload dictionary",
+                },
+                "raw_jsonl": {
+                    "type": "string",
+                    "description": "Optional raw multiline JSONL string for streaming execution",
+                },
+            },
+            "required": ["uri"],
+        },
+    },
+    {
+        "name": "dockuri_search_procedures",
+        "description": "Search registered Dockuri procedures across the workspace by natural language query or keywords (DOCK-REG-001).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Natural language query or keywords in Polish/English",
+                },
+                "project": {
+                    "type": "string",
+                    "description": "Specific project directory to scan (defaults to current directory or ~/github)",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of candidate procedures to return",
+                    "default": 5,
+                },
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "dockuri_list_projects",
+        "description": "List all projects in the workspace runnable via Dockuri along with their descriptors and procedure counts (DOCK-DISP-001).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root_dir": {
+                    "type": "string",
+                    "description": "Directory to scan for projects (defaults to current directory or ~/github)",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum projects to return",
+                    "default": 20,
+                },
+            },
+        },
+    },
+    {
+        "name": "dockuri_manage_process",
+        "description": "Declaratively generate, modify, relocate, or generate code snippets for a URI process in dockuri.yaml (DOCK-LFC-001).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["generate", "modify", "relocate", "snippet"],
+                    "description": "Lifecycle action to perform",
+                },
+                "target_uri": {
+                    "type": "string",
+                    "description": "Canonical URI of the process",
+                },
+                "new_uri": {
+                    "type": "string",
+                    "description": "New target URI when action is 'relocate'",
+                },
+                "language": {
+                    "type": "string",
+                    "enum": ["python", "bash", "js", "rust", "go", "php"],
+                    "description": "Target language for action='snippet'",
+                    "default": "python",
+                },
+                "run": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Command line array for 'generate' or 'modify'",
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Human-readable description of the procedure",
+                },
+            },
+            "required": ["action", "target_uri"],
+        },
+    },
+    {
+        "name": "dockuri_check_conformance",
+        "description": "Run the Dockuri standard conformance and latency audit on a project (DOCK-STD-001, DOCK-DISP-001).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "project": {
+                    "type": "string",
+                    "description": "Project directory to audit",
+                },
+                "test_sentence": {
+                    "type": "string",
+                    "description": "Sample sentence to test dispatch latency budget",
+                },
+            },
+        },
+    },
+]
+
+
+def handle_execute_sentence(args: Dict[str, Any]) -> Dict[str, Any]:
+    sentence = args["sentence"]
+    project_str = args.get("project") or os.getcwd()
+    project_path = Path(project_str).resolve()
+    dry_run = bool(args.get("dry_run", False))
+    extra_payload = args.get("payload") or {}
+
+    t0 = time.perf_counter()
+    readiness = inspect_project_dockuri_readiness(project_path)
+
+    # Search for matching procedure
+    reg = DockuriRegistry()
+    reg.scan_path(project_path)
+    matched = reg.search_for_nl(sentence, limit=3)
+
+    if matched:
+        target_uri = matched[0].uri
+        matched_proc = matched[0].proc
+    else:
+        project_name = project_path.name
+        target_uri = f"proc://{project_name}/run/instruction/v1"
+        matched_proc = f"{project_name}.run"
+
+    dispatch_payload = {
+        "instruction": sentence,
+        "project": str(project_path),
+        "dry_run": dry_run,
+        **extra_payload,
+    }
+
+    result = uri(target_uri, dispatch_payload)
+    t1 = time.perf_counter()
+    duration_ms = round((t1 - t0) * 1000.0, 3)
+
+    return {
+        "status": "ok",
+        "sentence": sentence,
+        "matched_uri": target_uri,
+        "matched_proc": matched_proc,
+        "duration_ms": duration_ms,
+        "readiness": readiness,
+        "execution_result": result,
+    }
+
+
+def handle_call_uri(args: Dict[str, Any]) -> Any:
+    target_uri = args["uri"]
+    payload = args.get("payload")
+    raw_jsonl = args.get("raw_jsonl")
+    data = raw_jsonl if raw_jsonl is not None else payload
+    t0 = time.perf_counter()
+    res = uri(target_uri, data)
+    t1 = time.perf_counter()
+    duration_ms = round((t1 - t0) * 1000.0, 3)
+    if isinstance(res, dict):
+        res["_mcp_duration_ms"] = duration_ms
+    return res
+
+
+def handle_search_procedures(args: Dict[str, Any]) -> Dict[str, Any]:
+    query = args["query"]
+    limit = int(args.get("limit", 5))
+    project_str = args.get("project")
+    scan_dir = Path(project_str).resolve() if project_str else Path(os.getcwd())
+
+    t0 = time.perf_counter()
+    reg = DockuriRegistry()
+    reg.scan_path(scan_dir)
+    results = reg.search_for_nl(query, limit=limit)
+    t1 = time.perf_counter()
+
+    return {
+        "query": query,
+        "total_indexed": len(reg.procedures),
+        "duration_ms": round((t1 - t0) * 1000.0, 3),
+        "candidates": [r.to_dict() for r in results],
+    }
+
+
+def handle_list_projects(args: Dict[str, Any]) -> Dict[str, Any]:
+    root_str = args.get("root_dir")
+    root_dir = Path(root_str).resolve() if root_str else Path.home() / "github"
+    limit = int(args.get("limit", 20))
+
+    t0 = time.perf_counter()
+    projects: List[Dict[str, Any]] = []
+
+    if root_dir.exists():
+        for entry in root_dir.iterdir():
+            if entry.is_dir() and not entry.name.startswith("."):
+                try:
+                    rd = inspect_project_dockuri_readiness(entry)
+                    if rd["status"] == "PASS" or rd["runnable_procedures_count"] > 0:
+                        projects.append(rd)
+                        if len(projects) >= limit:
+                            break
+                except Exception:
+                    pass
+
+    t1 = time.perf_counter()
+    return {
+        "root_scanned": str(root_dir),
+        "runnable_projects_count": len(projects),
+        "duration_ms": round((t1 - t0) * 1000.0, 3),
+        "projects": projects,
+    }
+
+
+def handle_manage_process(args: Dict[str, Any]) -> Dict[str, Any]:
+    action = args["action"]
+    target_uri = args["target_uri"]
+    language = args.get("language", "python")
+
+    if action == "snippet":
+        snip = render_uri_call_snippet(target_uri, default_params={"dry_run": True}, language=language)
+        return {"status": "ok", "action": "snippet", "target_uri": target_uri, "language": language, "snippet": snip}
+
+    manage_payload = {
+        "action": action,
+        "target_uri": target_uri,
+        "new_uri": args.get("new_uri"),
+        "run": args.get("run"),
+        "description": args.get("description"),
+        "language": language,
+    }
+    return uri("proc://system/process/manage/v1", manage_payload)
+
+
+def handle_check_conformance(args: Dict[str, Any]) -> Dict[str, Any]:
+    project_str = args.get("project") or os.getcwd()
+    project_path = Path(project_str).resolve()
+    test_sentence = args.get("test_sentence")
+    return check_uri_standard_conformance(
+        project_path=project_path,
+        test_sentence=test_sentence,
+    )
+
+
+TOOL_DISPATCHERS: Dict[str, Callable[[Dict[str, Any]], Any]] = {
+    "dockuri_execute_sentence": handle_execute_sentence,
+    "dockuri_call_uri": handle_call_uri,
+    "dockuri_search_procedures": handle_search_procedures,
+    "dockuri_list_projects": handle_list_projects,
+    "dockuri_manage_process": handle_manage_process,
+    "dockuri_check_conformance": handle_check_conformance,
+}
+
+
+def process_jsonrpc_request(req: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Process a single Model Context Protocol JSON-RPC 2.0 message."""
+    method = req.get("method")
+    msg_id = req.get("id")
+
+    if method == "initialize":
+        return {
+            "jsonrpc": "2.0",
+            "id": msg_id,
+            "result": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {
+                    "tools": {"listChanged": False},
+                },
+                "serverInfo": {
+                    "name": "dockuri-mcp",
+                    "version": "0.1.0",
+                    "description": "Dockuri Zero-Cold-Start Fast URI Process MCP Server",
+                },
+            },
+        }
+
+    if method == "notifications/initialized":
+        return None
+
+    if method == "ping":
+        return {"jsonrpc": "2.0", "id": msg_id, "result": {}}
+
+    if method == "tools/list":
+        return {
+            "jsonrpc": "2.0",
+            "id": msg_id,
+            "result": {"tools": MCP_TOOLS_SPEC},
+        }
+
+    if method == "tools/call":
+        params = req.get("params", {})
+        tool_name = params.get("name")
+        tool_args = params.get("arguments", {})
+
+        if tool_name not in TOOL_DISPATCHERS:
+            return {
+                "jsonrpc": "2.0",
+                "id": msg_id,
+                "error": {
+                    "code": -32601,
+                    "message": f"Method not found: unknown tool '{tool_name}'",
+                },
+            }
+
+        try:
+            handler = TOOL_DISPATCHERS[tool_name]
+            result_data = handler(tool_args)
+            return {
+                "jsonrpc": "2.0",
+                "id": msg_id,
+                "result": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps(result_data, indent=2, ensure_ascii=False),
+                        }
+                    ],
+                    "isError": False,
+                },
+            }
+        except Exception as e:
+            return {
+                "jsonrpc": "2.0",
+                "id": msg_id,
+                "result": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps({"status": "error", "error": str(e)}, ensure_ascii=False),
+                        }
+                    ],
+                    "isError": True,
+                },
+            }
+
+    if msg_id is not None:
+        return {
+            "jsonrpc": "2.0",
+            "id": msg_id,
+            "error": {
+                "code": -32601,
+                "message": f"Unsupported JSON-RPC method: '{method}'",
+            },
+        }
+    return None
+
+
+def run_stdio_server() -> None:
+    """Run MCP JSON-RPC 2.0 stdio server loop."""
+    sys.stderr.write("[dockuri-mcp] Server started (stdio JSON-RPC 2.0)\n")
+    sys.stderr.flush()
+
+    for line in sys.stdin:
+        line_str = line.strip()
+        if not line_str:
+            continue
+        try:
+            req = json.loads(line_str)
+            res = process_jsonrpc_request(req)
+            if res is not None:
+                sys.stdout.write(json.dumps(res, ensure_ascii=False) + "\n")
+                sys.stdout.flush()
+        except json.JSONDecodeError as err:
+            err_res = {
+                "jsonrpc": "2.0",
+                "id": None,
+                "error": {"code": -32700, "message": f"Parse error: {err}"},
+            }
+            sys.stdout.write(json.dumps(err_res, ensure_ascii=False) + "\n")
+            sys.stdout.flush()
+        except Exception as fatal:
+            sys.stderr.write(f"[dockuri-mcp] Error: {fatal}\n")
+            sys.stderr.flush()
+
+
+def main() -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Dockuri Model Context Protocol (MCP) Server.")
+    parser.add_argument("--stdio", action="store_true", default=True, help="Run in stdio mode (default)")
+    parser.add_argument("--list-tools", action="store_true", help="Print available tools in MCP format and exit")
+    parser.add_argument("--call", type=str, default=None, help="Directly invoke a tool: --call <tool_name>")
+    parser.add_argument("--args", type=str, default="{}", help="JSON arguments for --call")
+    args = parser.parse_args()
+
+    if args.list_tools:
+        print(json.dumps(MCP_TOOLS_SPEC, indent=2, ensure_ascii=False))
+        return 0
+
+    if args.call:
+        tool_name = args.call
+        tool_args = json.loads(args.args)
+        req = {
+            "jsonrpc": "2.0",
+            "id": "direct-call",
+            "method": "tools/call",
+            "params": {"name": tool_name, "arguments": tool_args},
+        }
+        res = process_jsonrpc_request(req)
+        print(json.dumps(res, indent=2, ensure_ascii=False))
+        return 0
+
+    run_stdio_server()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

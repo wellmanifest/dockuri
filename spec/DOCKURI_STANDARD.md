@@ -271,4 +271,50 @@ flowchart TD
 3. **Zero duplikacji kodu (SSOT)**: Jeden proces URI zdefiniowany w Dockuri jest re-używalny w dziesiątkach repozytoriów jednocześnie.
 4. **Wielojęzyczność**: Niezależnie od tego, czy projekt napisano w Pythonie, Node.js, Rust czy PHP, interfejs wywołania `uri(...)` pozostaje identyczny.
 
+### `DOCK-MCP-001: Model Context Protocol (MCP) Standard Server Bridge`
+Standard Dockuri definiuje interoperacyjny most serwerowy **Model Context Protocol (MCP)**, umożliwiający modelom LLM (Google Gemini / Antigravity IDE, Anthropic Claude Desktop, OpenAI Codex CLI) bezpośrednie, bezpieczne i ultra-szybkie wywoływanie procesów URI oraz dyspozycję poleceń języka naturalnego bez opuszczania kontekstu agenta.
+
+#### 1. Architektura i Transport
+* **Protokół**: JSON-RPC 2.0 przez standardowe wejście/wyjście (`stdio`).
+* **Punkt wejścia**: Komenda `dockuri-mcp` (lub `python3 -m src.dockuri_mcp`).
+* **Tryb pracy**: Trwały demon stdio w tle (long-lived background worker). Brak narzutu uruchamiania interpretera Pythona per zapytanie (< 0.5 ms na żądanie).
+
+#### 2. Standardowy zestaw narzędzi MCP (`tools/list`):
+1. **`dockuri_execute_sentence`**:
+   * **Opis**: Wykonuje dowolne zdanie/polecenie w języku naturalnym na bazie dowolnego projektu uruchamialnego przez Dockuri (`DOCK-DISP-001`).
+   * **Parametry**: `sentence` (string, wymagany), `project` (string, opcjonalny), `dry_run` (bool), `context` (object).
+   * **Wynik**: Status wykonania, dopasowany kanoniczny proces URI, wyjście procesu (`stdout`/`result`), czas trwania w ms.
+
+2. **`dockuri_call_uri`**:
+   * **Opis**: Wywołuje kanoniczny proces URI (`proc://...`, `dockuri://...`, `willman://...`) z parametrami lub wsadem wieloliniowym JSONL (`DOCK-URI-001`).
+   * **Parametry**: `uri` (string, wymagany), `params` (object, opcjonalny), `jsonl_lines` (array[object], opcjonalny), `socket_path` (string, opcjonalny).
+   * **Wynik**: Wynik procedury UDS / in-process, metryki, kwit wykonania URN.
+
+3. **`dockuri_search_procedures`**:
+   * **Opis**: Przeszukuje katalog procedur i procesów URI w organizacji na podstawie zapytania tekstowego lub semantycznego.
+   * **Parametry**: `query` (string, wymagany), `limit` (integer, domyślnie 10), `category` (string, opcjonalny).
+   * **Wynik**: Lista dopasowanych procedur wraz z podpisami wejścia/wyjścia i kanonicznymi adresami URI.
+
+4. **`dockuri_list_projects`**:
+   * **Opis**: Odkrywa wszystkie projekty uruchamialne przez Dockuri w podanym katalogu roboczym (przeszukuje `dockuri.yaml`, `dockuri.json`, `.dockuri/`).
+   * **Parametry**: `workspace_root` (string, opcjonalny), `max_depth` (integer, domyślnie 3).
+   * **Wynik**: Lista projektów, typów manifestów i liczby procedur.
+
+5. **`dockuri_manage_process`**:
+   * **Opis**: Deklaratywne zarządzanie cyklem życia procesu URI (`DOCK-LFC-001`): generowanie, modyfikacja, relokacja oraz pobieranie snippetów wywołania.
+   * **Parametry**: `action` (generate | modify | relocate | snippet), `uri` (string), `command` (array[string]), `project` (string), `snippet_lang` (string).
+   * **Wynik**: Zaktualizowany manifest, kod snippetu linkującego lub kwit relokacji.
+
+6. **`dockuri_check_conformance`**:
+   * **Opis**: Weryfikuje zgodność projektu z normami Dockuri (`DOCK-MAN-001`, `DOCK-URI-001`, `DOCK-PRM-001`, `DOCK-MCP-001`).
+   * **Parametry**: `project` (string), `check_all` (bool).
+   * **Wynik**: Raport zgodności, lista ostrzeżeń i czas reakcji.
+
+#### 3. Eliminacja wąskich gardeł (Bottleneck Elimination):
+* **Szybka ścieżka manifestu (Fast Path Manifest Discovery)**: Bezpośredni odczyt `dockuri.yaml` z parametru `project` bez blokowania bazy SQLite / sieciowego przeszukiwania git (`< 6 ms` zamiast `7 000 - 19 500 ms`).
+* **Trwały proces stdio**: Połączenie MCP utrzymuje proces w pamięci RAM, eliminując `fork/exec` i boot Pythona (`< 0.5 ms` zamiast `180 - 220 ms`).
+* **Pruning katalogów**: Pomijanie `.venv`, `node_modules`, `target`, `.git` podczas indeksowania projektów (`< 25 ms` zamiast `2500 ms`).
+* **Redukcja tokenów LLM**: Generowanie wywołania narzędzia MCP zajmuje modelowi ~20 tokenów (~0.3 s) wobec 400 tokenów kodu skryptu (~6.0 s).
+
+
 

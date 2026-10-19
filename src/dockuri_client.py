@@ -271,6 +271,43 @@ def _invoke_single(clean_uri: str, params: dict[str, Any], socket_path: str | No
             },
         }
 
+    # Fast path: check if project-local manifest defines this process
+    proj_dir = params.get("project") or params.get("project_root") or params.get("root")
+    if proj_dir:
+        p_path = Path(str(proj_dir)).expanduser()
+        for m_name in ("dockuri.yaml", "dockuri.yml", ".dockuri/dockuri.yaml"):
+            mf = p_path / m_name
+            if mf.is_file():
+                try:
+                    import yaml  # type: ignore
+                    data = yaml.safe_load(mf.read_text(encoding="utf-8"))
+                    raw_procs = data.get("processes", {}) if isinstance(data, dict) else {}
+                    proc_def = None
+                    if isinstance(raw_procs, dict) and clean_uri in raw_procs:
+                        proc_def = raw_procs[clean_uri]
+                    elif isinstance(raw_procs, list):
+                        for p in raw_procs:
+                            if isinstance(p, dict) and p.get("uri") == clean_uri:
+                                proc_def = p
+                                break
+                    elif isinstance(data, dict) and data.get("uri") == clean_uri:
+                        proc_def = data
+
+                    if proc_def is not None:
+                        run_cmd = proc_def.get("run") or ["echo", clean_uri]
+                        if params.get("dry_run"):
+                            return {"status": "ok", "uri": clean_uri, "dry_run": True, "command": run_cmd}
+                        import subprocess
+                        proc = subprocess.run(run_cmd, capture_output=True, text=True, check=False)
+                        return {
+                            "status": "ok" if proc.returncode == 0 else "error",
+                            "uri": clean_uri,
+                            "returncode": proc.returncode,
+                            "stdout": proc.stdout.strip(),
+                        }
+                except Exception:
+                    pass
+
     sock = socket_path or params.pop("_socket", None) or os.environ.get("DOCKURI_SOCKET")
     if sock and os.path.exists(str(sock)):
         parts = urlsplit(clean_uri)
@@ -283,7 +320,20 @@ def _invoke_single(clean_uri: str, params: dict[str, Any], socket_path: str | No
         res = _runtime_uri.uri(clean_uri, params)
         return res if isinstance(res, dict) else {"status": "ok", "results": res}
     except ImportError:
-        pass
+        for cand in (
+            Path.home() / "github" / "dockuri" / "dockuri" / "python",
+            Path.home() / "github" / "paxlet-com" / "dockuri" / "python",
+        ):
+            if (cand / "dockuri_uri.py").is_file():
+                cand_str = str(cand)
+                if cand_str not in sys.path:
+                    sys.path.insert(0, cand_str)
+                try:
+                    import dockuri_uri as _runtime_uri  # type: ignore
+                    res = _runtime_uri.uri(clean_uri, params)
+                    return res if isinstance(res, dict) else {"status": "ok", "results": res}
+                except ImportError:
+                    pass
 
     uri_bin = shutil.which("uri") or shutil.which("dockuri")
     if uri_bin:

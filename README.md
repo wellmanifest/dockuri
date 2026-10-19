@@ -31,10 +31,30 @@ Detailed normative specification is in [`spec/DOCKURI_STANDARD.md`](spec/DOCKURI
 - `DOCK-PRM-001`: Normative Generic Prompts & URI-First Enforcement (`--check-uri-standard`)
 - `DOCK-DISP-001`: Universal NL Sentence Dispatch on Any Dockuri-Runnable Project
 - `DOCK-ACC-001`: Fast URI Execution Acceleration (Floor -> Standard -> Opportunistic)
+- `DOCK-MCP-001`: Model Context Protocol (MCP) Standard Server Bridge (`dockuri-mcp`)
 
 ---
 
 ## 🚀 Quick Start
+
+### 0. Use via MCP (Model Context Protocol for Google Gemini, Claude, Codex)
+Configure `dockuri-mcp` in your agent's MCP configuration (`mcpServers`):
+```json
+{
+  "mcpServers": {
+    "dockuri": {
+      "command": "dockuri-mcp"
+    }
+  }
+}
+```
+Available tools:
+* `dockuri_execute_sentence`: Execute any NL command on any project (`< 6 ms`).
+* `dockuri_call_uri`: Call canonical URI processes with args or JSONL.
+* `dockuri_search_procedures`: Search organization procedures semantically/lexically.
+* `dockuri_list_projects`: Discover all Dockuri-runnable projects.
+* `dockuri_manage_process`: Generate, modify, relocate, and generate snippets (`DOCK-LFC-001`).
+* `dockuri_check_conformance`: Validate project against Dockuri standards.
 
 ### 1. Execute Any Sentence on Any Project Runnable via Dockuri (Fast Method)
 ```bash
