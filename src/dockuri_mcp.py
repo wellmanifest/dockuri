@@ -140,13 +140,13 @@ MCP_TOOLS_SPEC: List[Dict[str, Any]] = [
     },
     {
         "name": "dockuri_manage_process",
-        "description": "Declaratively generate, modify, relocate, or generate code snippets for a URI process in dockuri.yaml (DOCK-LFC-001).",
+        "description": "Declaratively generate, modify, relocate, list, or generate code snippets for a URI process in dockuri.yaml (DOCK-LFC-001).",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["generate", "modify", "relocate", "snippet"],
+                    "enum": ["generate", "modify", "mutate", "relocate", "move", "extract", "catalog", "list", "snippet", "prompt_registry"],
                     "description": "Lifecycle action to perform",
                 },
                 "target_uri": {
@@ -159,7 +159,7 @@ MCP_TOOLS_SPEC: List[Dict[str, Any]] = [
                 },
                 "language": {
                     "type": "string",
-                    "enum": ["python", "bash", "js", "rust", "go", "php"],
+                    "enum": ["python", "bash", "js", "ts", "rust", "go", "php"],
                     "description": "Target language for action='snippet'",
                     "default": "python",
                 },
@@ -173,7 +173,7 @@ MCP_TOOLS_SPEC: List[Dict[str, Any]] = [
                     "description": "Human-readable description of the procedure",
                 },
             },
-            "required": ["action", "target_uri"],
+            "required": ["action"],
         },
     },
     {
@@ -269,12 +269,26 @@ def handle_execute_sentence(args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def handle_call_uri(args: Dict[str, Any]) -> Any:
+    if not args.get("uri") and args.get("sentence"):
+        return handle_execute_sentence(args)
     target_uri = args["uri"]
-    payload = args.get("payload")
-    raw_jsonl = args.get("raw_jsonl")
-    data = raw_jsonl if raw_jsonl is not None else payload
+    payload = dict(args.get("payload") or args.get("params") or args.get("args") or {})
+    if args.get("project") and "project" not in payload:
+        payload["project"] = args["project"]
+    elif (
+        target_uri in ("proc://system/sprint/deduplicate/v1", "proc://system/worktree/promote/v1")
+        and not any(k in payload for k in ("project", "projects", "workspace_root"))
+    ):
+        payload["project"] = os.getcwd()
+    if args.get("dry_run") is not None and "dry_run" not in payload:
+        payload["dry_run"] = bool(args["dry_run"])
+    raw_jsonl = args.get("raw_jsonl") or args.get("jsonl_lines")
     t0 = time.perf_counter()
-    res = uri(target_uri, data)
+    if raw_jsonl is not None:
+        lines = raw_jsonl.splitlines() if isinstance(raw_jsonl, str) else list(raw_jsonl)
+        res = {"status": "ok", "uri": target_uri, "results": uri_jsonl(target_uri, lines, socket_path=args.get("socket_path"))}
+    else:
+        res = uri(target_uri, payload, socket_path=args.get("socket_path"))
     t1 = time.perf_counter()
     duration_ms = round((t1 - t0) * 1000.0, 3)
     if isinstance(res, dict):
@@ -302,16 +316,16 @@ def handle_search_procedures(args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def handle_list_projects(args: Dict[str, Any]) -> Dict[str, Any]:
-    root_str = args.get("root_dir")
-    root_dir = Path(root_str).resolve() if root_str else Path.home() / "github"
+    root_str = args.get("root_dir") or args.get("workspace_root") or args.get("project")
+    root_dir = Path(root_str).resolve() if root_str else Path(os.getcwd())
     limit = int(args.get("limit", 20))
 
     t0 = time.perf_counter()
     projects: List[Dict[str, Any]] = []
 
     if root_dir.exists():
-        for entry in root_dir.iterdir():
-            if entry.is_dir() and not entry.name.startswith("."):
+        for entry in sorted(root_dir.iterdir()):
+            if entry.is_dir() and not entry.name.startswith(".") and not entry.name.endswith("-archive"):
                 try:
                     rd = inspect_project_dockuri_readiness(entry)
                     if rd["status"] == "PASS" or rd["runnable_procedures_count"] > 0:
@@ -331,22 +345,27 @@ def handle_list_projects(args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def handle_manage_process(args: Dict[str, Any]) -> Dict[str, Any]:
-    action = args["action"]
-    target_uri = args["target_uri"]
-    language = args.get("language", "python")
+    raw_action = str(args.get("action") or "catalog").strip().lower()
+    action = {"list": "catalog", "mutate": "modify", "move": "relocate"}.get(raw_action, raw_action)
+    target_uri = str(args.get("target_uri") or args.get("uri") or "proc://system/sprint/deduplicate/v1")
+    language = str(args.get("language") or args.get("snippet_lang") or args.get("lang") or "python")
 
     if action == "snippet":
         snip = render_uri_call_snippet(target_uri, default_params={"dry_run": True}, language=language)
         return {"status": "ok", "action": "snippet", "target_uri": target_uri, "language": language, "snippet": snip}
 
-    manage_payload = {
+    manage_payload: Dict[str, Any] = {
         "action": action,
         "target_uri": target_uri,
         "new_uri": args.get("new_uri"),
-        "run": args.get("run"),
+        "run": args.get("run") or args.get("command"),
         "description": args.get("description"),
         "language": language,
     }
+    if args.get("query") or args.get("prompt"):
+        manage_payload["query"] = args.get("query") or args.get("prompt")
+    if args.get("project"):
+        manage_payload["manifest"] = str(Path(str(args["project"])).resolve() / "dockuri.yaml")
     return uri("proc://system/process/manage/v1", manage_payload)
 
 
@@ -436,6 +455,12 @@ TOOL_DISPATCHERS: Dict[str, Callable[[Dict[str, Any]], Any]] = {
     "dockuri_check_conformance": handle_check_conformance,
     "dockuri_prompt_registry": handle_prompt_registry,
     "dockuri_provider_config": handle_provider_config,
+    # Dot-named aliases matching dockuri/dockuri MCP Server
+    "dockuri.uri": handle_call_uri,
+    "dockuri.search": handle_search_procedures,
+    "dockuri.prompt_registry": handle_prompt_registry,
+    "dockuri.process_manage": handle_manage_process,
+    "dockuri.provider_config": handle_provider_config,
 }
 
 
