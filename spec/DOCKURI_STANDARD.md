@@ -272,49 +272,72 @@ flowchart TD
 4. **Wielojęzyczność**: Niezależnie od tego, czy projekt napisano w Pythonie, Node.js, Rust czy PHP, interfejs wywołania `uri(...)` pozostaje identyczny.
 
 ### `DOCK-MCP-001: Model Context Protocol (MCP) Standard Server Bridge`
-Standard Dockuri definiuje interoperacyjny most serwerowy **Model Context Protocol (MCP)**, umożliwiający modelom LLM (Google Gemini / Antigravity IDE, Anthropic Claude Desktop, OpenAI Codex CLI) bezpośrednie, bezpieczne i ultra-szybkie wywoływanie procesów URI oraz dyspozycję poleceń języka naturalnego bez opuszczania kontekstu agenta.
+Standard Dockuri definiuje interoperacyjny most serwerowy **Model Context Protocol (MCP)**, umożliwiający modelom LLM (Google Gemini / Antigravity IDE, Anthropic Claude Code / Claude Desktop, OpenAI Codex CLI, Cursor, VS Code, Windsurf, Shell CLI) bezpośrednie, bezpieczne i ultra-szybkie wywoływanie procesów URI oraz dyspozycję poleceń języka naturalnego bez opuszczania kontekstu agenta.
 
-#### 1. Architektura i Transport
+#### 1. Architektura, Transport i Aliasy Nazewnicze
 * **Protokół**: JSON-RPC 2.0 przez standardowe wejście/wyjście (`stdio`).
-* **Punkt wejścia**: Komenda `dockuri-mcp` (lub `python3 -m src.dockuri_mcp`).
-* **Tryb pracy**: Trwały demon stdio w tle (long-lived background worker). Brak narzutu uruchamiania interpretera Pythona per zapytanie (< 0.5 ms na żądanie).
+* **Punkty wejścia**:
+  * Referencyjny serwer standardu: `dockuri-mcp` (`python3 -m src.dockuri_mcp --stdio`).
+  * Natywny serwer wykonawczy `dockuri/dockuri`: `dockuri mcp --allow-native` (`python3 python/dockuri_mcp.py --allow-native`).
+* **Tryb pracy**: Trwały demon stdio w tle (long-lived background worker) z opcją bezpośredniego wywołania CLI (`--call <tool> --args '<json>'` oraz `--provider-config <provider>`).
+* **Dwukierunkowa kompatybilność nazw narzędzi**: Serwer obsługuje zarówno nazwy podkreślnikowe wymagane przez walidatory `^[a-zA-Z0-9_-]{1,64}$` (`dockuri_call_uri`, `dockuri_prompt_registry`, ...), jak i nazwy kropkowe (`dockuri.uri`, `dockuri.prompt_registry`, `dockuri.process_manage`, `dockuri.provider_config`, `dockuri.search`).
 
-#### 2. Standardowy zestaw narzędzi MCP (`tools/list`):
-1. **`dockuri_execute_sentence`**:
+#### 2. Standardowy zestaw 8 narzędzi MCP (`tools/list`):
+1. **`dockuri_execute_sentence`** (alias: `dockuri.uri` z polem `sentence`):
    * **Opis**: Wykonuje dowolne zdanie/polecenie w języku naturalnym na bazie dowolnego projektu uruchamialnego przez Dockuri (`DOCK-DISP-001`).
-   * **Parametry**: `sentence` (string, wymagany), `project` (string, opcjonalny), `dry_run` (bool), `context` (object).
-   * **Wynik**: Status wykonania, dopasowany kanoniczny proces URI, wyjście procesu (`stdout`/`result`), czas trwania w ms.
+   * **Parametry**: `sentence` (string, wymagany), `project` (string, opcjonalny), `dry_run` (bool), `payload` (object).
+   * **Wynik**: Status wykonania, dopasowany kanoniczny proces URI (`matched_uri`), wyjście procesu, czas trwania w ms.
 
-2. **`dockuri_call_uri`**:
-   * **Opis**: Wywołuje kanoniczny proces URI (`proc://...`, `dockuri://...`, `willman://...`) z parametrami lub wsadem wieloliniowym JSONL (`DOCK-URI-001`).
-   * **Parametry**: `uri` (string, wymagany), `params` (object, opcjonalny), `jsonl_lines` (array[object], opcjonalny), `socket_path` (string, opcjonalny).
-   * **Wynik**: Wynik procedury UDS / in-process, metryki, kwit wykonania URN.
+2. **`dockuri_call_uri`** (alias: `dockuri.uri`):
+   * **Opis**: Wywołuje kanoniczny proces URI (`proc://...`, `dockuri://...`, `willman://...`, `pdf://...`, `git://...`) z parametrami lub wsadem wieloliniowym JSONL (`DOCK-URI-001`).
+   * **Parametry**: `uri` (string, wymagany), `payload` / `params` (object, opcjonalny), `raw_jsonl` / `jsonl_lines` (string/array, opcjonalny), `project` (string, opcjonalny), `dry_run` (bool, opcjonalny), `socket_path` (string, opcjonalny).
+   * **Wynik**: Wynik procedury UDS / cdylib / in-process, metryki czasu (`_mcp_duration_ms` / `duration_ms`), kwit wykonania URN.
 
-3. **`dockuri_search_procedures`**:
-   * **Opis**: Przeszukuje katalog procedur i procesów URI w organizacji na podstawie zapytania tekstowego lub semantycznego.
-   * **Parametry**: `query` (string, wymagany), `limit` (integer, domyślnie 10), `category` (string, opcjonalny).
-   * **Wynik**: Lista dopasowanych procedur wraz z podpisami wejścia/wyjścia i kanonicznymi adresami URI.
+3. **`dockuri_search_procedures`** (alias: `dockuri.search`):
+   * **Opis**: Przeszukuje katalog procedur i procesów URI (`dockuri.yaml`, `dockuri.json`, `uriprocess.json`, `connector.manifest.json`, `apx.yaml`) na podstawie zapytania tekstowego lub semantycznego.
+   * **Parametry**: `query` (string, wymagany), `project` (string, opcjonalny), `limit` (integer, domyślnie 5).
+   * **Wynik**: Lista dopasowanych procedur wraz z podpisami wejścia/wyjścia, skrótem kontraktu (`contract_digest`) i kanonicznymi adresami URI.
 
 4. **`dockuri_list_projects`**:
-   * **Opis**: Odkrywa wszystkie projekty uruchamialne przez Dockuri w podanym katalogu roboczym (przeszukuje `dockuri.yaml`, `dockuri.json`, `.dockuri/`).
-   * **Parametry**: `workspace_root` (string, opcjonalny), `max_depth` (integer, domyślnie 3).
+   * **Opis**: Odkrywa wszystkie projekty uruchamialne przez Dockuri w podanym katalogu roboczym (przeszukuje `dockuri.yaml`, `dockuri.json`, `uriprocess.json`, `.dockuri/`).
+   * **Parametry**: `root_dir` / `workspace_root` (string, opcjonalny), `limit` (integer, domyślnie 20).
    * **Wynik**: Lista projektów, typów manifestów i liczby procedur.
 
-5. **`dockuri_manage_process`**:
-   * **Opis**: Deklaratywne zarządzanie cyklem życia procesu URI (`DOCK-LFC-001`): generowanie, modyfikacja, relokacja oraz pobieranie snippetów wywołania.
-   * **Parametry**: `action` (generate | modify | relocate | snippet), `uri` (string), `command` (array[string]), `project` (string), `snippet_lang` (string).
+5. **`dockuri_manage_process`** (alias: `dockuri.process_manage`):
+   * **Opis**: Deklaratywne zarządzanie cyklem życia procesu URI (`DOCK-LFC-001`): generowanie, modyfikacja, relokacja oraz pobieranie poliglotycznych snippetów wywołania (`python`, `bash`, `js`, `ts`, `rust`, `go`, `php`).
+   * **Parametry**: `action` (`generate` | `modify` | `relocate` | `extract` | `catalog` | `snippet` | `prompt_registry` | `llm_context`), `target_uri` / `uri` (string), `new_uri` (string), `run` / `command` (array[string]), `project` (string), `language` / `lang` (string).
    * **Wynik**: Zaktualizowany manifest, kod snippetu linkującego lub kwit relokacji.
 
 6. **`dockuri_check_conformance`**:
-   * **Opis**: Weryfikuje zgodność projektu z normami Dockuri (`DOCK-MAN-001`, `DOCK-URI-001`, `DOCK-PRM-001`, `DOCK-MCP-001`).
-   * **Parametry**: `project` (string), `check_all` (bool).
-   * **Wynik**: Raport zgodności, lista ostrzeżeń i czas reakcji.
+   * **Opis**: Weryfikuje zgodność projektu z normami Dockuri (`DOCK-MAN-001`, `DOCK-URI-001`, `DOCK-LFC-001`, `DOCK-PRM-001`, `DOCK-DISP-001`, `DOCK-MCP-001`).
+   * **Parametry**: `project` (string), `test_sentence` (string, opcjonalny).
+   * **Wynik**: Raport zgodności, lista ostrzeżeń i pomiar opóźnienia dyspozycji.
 
-#### 3. Eliminacja wąskich gardeł (Bottleneck Elimination):
-* **Szybka ścieżka manifestu (Fast Path Manifest Discovery)**: Bezpośredni odczyt `dockuri.yaml` z parametru `project` bez blokowania bazy SQLite / sieciowego przeszukiwania git (`< 6 ms` zamiast `7 000 - 19 500 ms`).
-* **Trwały proces stdio**: Połączenie MCP utrzymuje proces w pamięci RAM, eliminując `fork/exec` i boot Pythona (`< 0.5 ms` zamiast `180 - 220 ms`).
-* **Pruning katalogów**: Pomijanie `.venv`, `node_modules`, `target`, `.git` podczas indeksowania projektów (`< 25 ms` zamiast `2500 ms`).
-* **Redukcja tokenów LLM**: Generowanie wywołania narzędzia MCP zajmuje modelowi ~20 tokenów (~0.3 s) wobec 400 tokenów kodu skryptu (~6.0 s).
+7. **`dockuri_prompt_registry`** (alias: `dockuri.prompt_registry`):
+   * **Opis**: Dynamicznie generuje dopasowany do promptu, ograniczony rejestr URI w formacie TOON (`schema: dockuri.llm-bounded-registry/v1`) oraz zawężony JSON Schema (`"enum": uris`) dla wywołań LLM.
+   * **Parametry**: `query` (string, wymagany), `top_k` (integer, domyślnie 8), `project` / `manifest` (string, opcjonalny), `context` (object, opcjonalny).
+   * **Wynik**: `shortlist`, `toon_yaml` (~97.4% redukcji objętości względem pełnego rejestru 818 procesów: `51,775 B -> 1,353 B`), `generation_schema`, `system_prompt_fragment`.
+
+8. **`dockuri_provider_config`** (alias: `dockuri.provider_config`):
+   * **Opis**: Zwraca gotowe konfiguracje klienta MCP oraz jednowierszowe komendy instalacji CLI dla dostawców LLM i środowisk IDE/Shell.
+   * **Parametry**: `provider` (`all` | `google` | `antigravity` | `gemini` | `codex` | `claude` | `ide` | `shell`), `command` (string, domyślnie `dockuri` lub `dockuri-mcp`).
+   * **Wynik**: Konfiguracje JSON/TOML (`mcpServers`, `toml_config`, `cli_install`, `config_paths`).
+
+#### 3. Integracja z dostawcami LLM, IDE oraz Shell CLI (`dockuri_provider_config`):
+| Provider / Środowisko | Klienty | Ścieżka konfiguracji | Szybka rejestracja CLI |
+| :--- | :--- | :--- | :--- |
+| **`google` / `antigravity` / `gemini`** | Google Antigravity IDE/CLI, Gemini CLI | `~/.gemini/settings.json`, `~/.gemini/antigravity-cli/mcp/dockuri/config.json` | `gemini mcp add dockuri -- dockuri mcp --allow-native` |
+| **`codex`** | OpenAI Codex CLI, Codex IDE | `~/.codex/config.toml` | `codex mcp add dockuri -- dockuri mcp --allow-native` |
+| **`claude`** | Anthropic Claude Code CLI, Claude Desktop | `~/.claude.json`, `~/.config/Claude/claude_desktop_config.json` | `claude mcp add dockuri -- dockuri mcp --allow-native` |
+| **`ide`** | Cursor, VS Code, Windsurf, Zed | `.cursor/mcp.json`, `.vscode/mcp.json` | `dockuri mcp --provider-config ide` |
+| **`shell`** | Bash/Zsh CLI, potoki CI/CD | Standardowe `PATH` (`uri`, `dockuri`) | `uri --llm-context "<zadanie>" 6` / `uri "proc://..." '{...}'` |
+
+#### 4. Eliminacja wąskich gardeł (Bottleneck Elimination):
+* **Ograniczenie głębokości skanowania (`max_depth=3`) i indeksacja `uriprocess.json`**: Zastąpienie nieograniczonego `os.walk` płytkim skanowaniem z wykluczeniem `.rescue`, `*-archive`, `.worktrees`, `.venv` zredukowało zimny start `dockuri_list_projects` z **`51 205 ms` do `235 ms` (`12.5 ms` warm — przyspieszenie >217x)**.
+* **Pre-filtrowanie SQLite `status="declared"` w `Registry.search`**: Pominięcie parsowania JSON (`unique_json`) dla 5 811 rekordów kandydujących przed sprawdzeniem statusu zredukowało czas `dockuri.search` z **`80.8 ms` do `< 0.5 ms` (przyspieszenie >160x)**.
+* **Leniwa analiza historii sprintów + `CSafeLoader` w `SprintDeduplicateService`**: Pomijanie odczytu archiwalnych plików `history-*.yaml` (np. 10.4 MB w `c2004`), gdy `current.yaml` nie zawiera aktywnych zadań, oraz użycie natywnego `yaml.CSafeLoader` i pamięci podręcznej mtime zredukowało czas wywołania `proc://system/sprint/deduplicate/v1` z **`84 762 ms` (skan całej organizacji) / `63.1 ms` (pojedynczy projekt) do `< 0.5 ms`**.
+* **Cache katalogu procesów i pre-kalkulacja rozmiaru TOON w `ProcessLifecycleService`**: Zbuforowanie 818 wpisów katalogu (`dockuri.yaml` + 4 pakiety Rust + 39 `uriprocess/native`) z inwalidacją `st_mtime_ns` zredukowało czas `dockuri.prompt_registry` z **`16.9 ms` cold / `3.0 ms` warm do `< 0.3 ms` warm**.
+
 
 
 

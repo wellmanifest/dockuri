@@ -48,13 +48,15 @@ Configure `dockuri-mcp` in your agent's MCP configuration (`mcpServers`):
   }
 }
 ```
-Available tools:
-* `dockuri_execute_sentence`: Execute any NL command on any project (`< 6 ms`).
-* `dockuri_call_uri`: Call canonical URI processes with args or JSONL.
-* `dockuri_search_procedures`: Search organization procedures semantically/lexically.
-* `dockuri_list_projects`: Discover all Dockuri-runnable projects.
-* `dockuri_manage_process`: Generate, modify, relocate, and generate snippets (`DOCK-LFC-001`).
-* `dockuri_check_conformance`: Validate project against Dockuri standards.
+Available tools (with `dockuri_*` and `dockuri.*` aliases):
+* `dockuri_execute_sentence` (`dockuri.uri` + `sentence`): Execute any NL command on any project (`< 1 ms` dry-run / `< 6 ms` exec).
+* `dockuri_call_uri` (`dockuri.uri`): Call canonical URI processes with args or JSONL.
+* `dockuri_search_procedures` (`dockuri.search`): Search organization procedures semantically/lexically (`< 0.5 ms`).
+* `dockuri_list_projects`: Discover all Dockuri-runnable projects (`~12.5 ms` warm).
+* `dockuri_manage_process` (`dockuri.process_manage`): Generate, modify, relocate, and render polyglot snippets (`DOCK-LFC-001`).
+* `dockuri_check_conformance`: Validate project against Dockuri standards (`< 2.5 ms`).
+* `dockuri_prompt_registry` (`dockuri.prompt_registry`): Emit dynamic bounded TOON registry (`dockuri.llm-bounded-registry/v1`, 97.4% size reduction) + constrained JSON Schema.
+* `dockuri_provider_config` (`dockuri.provider_config`): Generate ready-to-use MCP configs for Google Antigravity/Gemini, OpenAI Codex, Anthropic Claude, IDE, and Shell CLI.
 
 ### 1. Execute Any Sentence on Any Project Runnable via Dockuri (Fast Method)
 ```bash

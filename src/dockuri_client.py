@@ -251,6 +251,9 @@ def render_uri_call_snippet(
     )
 
 
+_PROJECT_MANIFEST_CACHE: dict[Path, tuple[int, Any]] = {}
+
+
 def _invoke_single(clean_uri: str, params: dict[str, Any], socket_path: str | None = None) -> dict[str, Any]:
     if clean_uri in _CUSTOM_URI_HANDLERS:
         return _CUSTOM_URI_HANDLERS[clean_uri](params)
@@ -273,21 +276,31 @@ def _invoke_single(clean_uri: str, params: dict[str, Any], socket_path: str | No
 
     # Fast path: check if project-local manifest defines this process
     proj_dir = params.get("project") or params.get("project_root") or params.get("root")
+    proj_path_resolved: Path | None = None
     if proj_dir:
         p_path = Path(str(proj_dir)).expanduser()
+        proj_path_resolved = p_path.resolve() if p_path.exists() else p_path
         for m_name in ("dockuri.yaml", "dockuri.yml", ".dockuri/dockuri.yaml"):
             mf = p_path / m_name
             if mf.is_file():
                 try:
                     import yaml  # type: ignore
-                    data = yaml.safe_load(mf.read_text(encoding="utf-8"))
+                    resolved_mf = mf.resolve()
+                    mtime = resolved_mf.stat().st_mtime_ns
+                    cached = _PROJECT_MANIFEST_CACHE.get(resolved_mf)
+                    if cached is not None and cached[0] == mtime:
+                        data = cached[1]
+                    else:
+                        loader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+                        data = yaml.load(resolved_mf.read_text(encoding="utf-8"), Loader=loader)
+                        _PROJECT_MANIFEST_CACHE[resolved_mf] = (mtime, data)
                     raw_procs = data.get("processes", {}) if isinstance(data, dict) else {}
                     proc_def = None
                     if isinstance(raw_procs, dict) and clean_uri in raw_procs:
                         proc_def = raw_procs[clean_uri]
                     elif isinstance(raw_procs, list):
                         for p in raw_procs:
-                            if isinstance(p, dict) and p.get("uri") == clean_uri:
+                            if isinstance(p, dict) and (p.get("uri") == clean_uri or clean_uri in (p.get("aliases") or [])):
                                 proc_def = p
                                 break
                     elif isinstance(data, dict) and data.get("uri") == clean_uri:
@@ -306,6 +319,9 @@ def _invoke_single(clean_uri: str, params: dict[str, Any], socket_path: str | No
                         }
                 except Exception:
                     pass
+
+    if params.get("dry_run") and clean_uri.endswith("/run/instruction/v1"):
+        return {"status": "ok", "uri": clean_uri, "dry_run": True, "dispatched": True, "echo": params}
 
     sock = socket_path or params.pop("_socket", None) or os.environ.get("DOCKURI_SOCKET")
     if sock and os.path.exists(str(sock)):
@@ -329,7 +345,7 @@ def _invoke_single(clean_uri: str, params: dict[str, Any], socket_path: str | No
                 sys.modules.pop("dockuri_registry", None)
             try:
                 import dockuri_uri as _runtime_uri  # type: ignore
-                res = _runtime_uri.uri(clean_uri, params)
+                res = _runtime_uri.uri(clean_uri, params, base_dir=proj_path_resolved)
                 return res if isinstance(res, dict) else {"status": "ok", "results": res}
             except ImportError:
                 pass

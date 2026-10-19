@@ -15,6 +15,27 @@ from pathlib import Path
 from typing import Any
 
 
+def _stem_token(w: str) -> str:
+    w = w.lower().strip()
+    if w.startswith("z") and len(w) > 4 and w[1] in "bcdfgjklmnprstvwz":
+        w = w[1:]
+    for pref in ("wy", "od", "po", "roz", "za", "prze"):
+        if w.startswith(pref) and len(w) > len(pref) + 3:
+            w = w[len(pref):]
+            break
+    return (
+        w.replace("k", "c")
+        .replace("ń", "n")
+        .replace("ó", "o")
+        .replace("ą", "a")
+        .replace("ę", "e")
+        .replace("ś", "s")
+        .replace("ł", "l")
+        .replace("ż", "z")
+        .replace("ź", "z")
+    )
+
+
 class ProcedureRecord:
     def __init__(
         self,
@@ -36,6 +57,13 @@ class ProcedureRecord:
         self.schema = schema
         self.manifest_path = manifest_path
         self.contract_digest = self._calc_digest()
+        self._proc_lower = proc.lower()
+        self._uri_lower = uri.lower()
+        self._desc_lower = desc.lower()
+        self._app_lower = app.lower()
+        search_corpus = f"{self._app_lower} {self._proc_lower} {self._desc_lower} {self._uri_lower}"
+        self._corpus_tokens = [t for t in re.findall(r"\w+", search_corpus) if len(t) > 1]
+        self._corpus_stems = {_stem_token(t) for t in self._corpus_tokens}
 
     def _calc_digest(self) -> str:
         data = {
@@ -64,61 +92,91 @@ class ProcedureRecord:
 EXCLUDED_DIRS = {
     ".git", ".hg", ".svn", "node_modules", "venv", ".venv", "target",
     "dist", "build", ".pytest_cache", ".cache", ".idea", ".vscode",
-    ".worktrees", ".subactor", ".code2llm_cache", "logs", "conversations"
+    ".worktrees", ".subactor", ".code2llm_cache", "logs", "conversations",
+    ".rescue", "archive", "benchmarks", "evidence", "wheels", "__pycache__",
 }
+
+
+def _safe_yaml_load(stream: Any) -> Any:
+    import yaml  # type: ignore
+    loader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+    return yaml.load(stream, Loader=loader)
 
 
 class DockuriRegistry:
     def __init__(self):
         self.procedures: dict[str, ProcedureRecord] = {}
 
-    def scan_path(self, root_dir: str | Path) -> int:
-        """Fast pruned scan for dockuri.json, connector.manifest.json, and apx.yaml."""
-        root = Path(root_dir)
+    def scan_path(self, root_dir: str | Path, max_depth: int = 3) -> int:
+        """Fast depth-bounded pruned scan for dockuri.yaml, dockuri.json, uriprocess.json, connector.manifest.json, and apx.yaml."""
+        root = Path(root_dir).resolve()
+        if not root.exists():
+            return 0
         count = 0
 
         for dirpath, dirnames, filenames in os.walk(root):
-            # Prune excluded directories in-place so os.walk skips them entirely
-            dirnames[:] = [d for d in dirnames if d not in EXCLUDED_DIRS and not d.startswith(".")]
+            cur = Path(dirpath)
+            try:
+                rel_depth = len(cur.relative_to(root).parts)
+            except ValueError:
+                rel_depth = 0
+            if rel_depth >= max_depth:
+                dirnames[:] = []
+            else:
+                dirnames[:] = [
+                    d for d in dirnames
+                    if d not in EXCLUDED_DIRS and not d.startswith(".") and not d.endswith("-archive")
+                ]
 
+            fset = set(filenames)
             # 0. Native dockuri.yaml / dockuri.yml (dockuri/proc-v2)
-            if "dockuri.yaml" in filenames or "dockuri.yml" in filenames:
-                f_name = "dockuri.yaml" if "dockuri.yaml" in filenames else "dockuri.yml"
-                f_path = Path(dirpath) / f_name
+            if "dockuri.yaml" in fset or "dockuri.yml" in fset:
+                f_name = "dockuri.yaml" if "dockuri.yaml" in fset else "dockuri.yml"
+                f_path = cur / f_name
                 try:
-                    import yaml  # type: ignore
                     with open(f_path, "r", encoding="utf-8") as f:
-                        count += self.register_dockuri_yaml_manifest(yaml.safe_load(f), str(f_path))
+                        count += self.register_dockuri_yaml_manifest(_safe_yaml_load(f), str(f_path))
                 except Exception:
                     pass
 
             # 1. Native dockuri.json
-            elif "dockuri.json" in filenames:
-                f_path = Path(dirpath) / "dockuri.json"
+            elif "dockuri.json" in fset:
+                f_path = cur / "dockuri.json"
                 try:
                     with open(f_path, "r", encoding="utf-8") as f:
                         count += self.register_manifest(json.load(f), str(f_path))
-                except Exception as e:
+                except Exception:
                     pass
 
-            # 2. urirun connector.manifest.json
-            elif "connector.manifest.json" in filenames:
-                f_path = Path(dirpath) / "connector.manifest.json"
+            # 2. uriprocess.json (uriprocess/v1)
+            elif "uriprocess.json" in fset:
+                f_path = cur / "uriprocess.json"
+                try:
+                    with open(f_path, "r", encoding="utf-8") as f:
+                        count += self.register_uriprocess_manifest(json.load(f), str(f_path))
+                except Exception:
+                    pass
+
+            # 3. urirun connector.manifest.json
+            elif "connector.manifest.json" in fset:
+                f_path = cur / "connector.manifest.json"
                 try:
                     with open(f_path, "r", encoding="utf-8") as f:
                         count += self.register_connector_manifest(json.load(f), str(f_path))
-                except Exception as e:
-                    pass
-
-            # 3. apx.yaml
-            elif "apx.yaml" in filenames:
-                f_path = Path(dirpath) / "apx.yaml"
-                try:
-                    import yaml
-                    with open(f_path, "r", encoding="utf-8") as f:
-                        count += self.register_apx_manifest(yaml.safe_load(f), str(f_path))
                 except Exception:
                     pass
+
+            # 4. apx.yaml
+            elif "apx.yaml" in fset:
+                f_path = cur / "apx.yaml"
+                try:
+                    with open(f_path, "r", encoding="utf-8") as f:
+                        count += self.register_apx_manifest(_safe_yaml_load(f), str(f_path))
+                except Exception:
+                    pass
+
+        if (root / "python" / "dockuri_uri.py").is_file():
+            count += self._register_builtin_dockuri_runtime(root)
 
         return count
 
@@ -222,6 +280,62 @@ class DockuriRegistry:
             count += 1
         return count
 
+    def register_uriprocess_manifest(self, data: dict[str, Any], file_path: str) -> int:
+        """Adapt a uriprocess.json (uriprocess/v1) into canonical ProcedureRecords."""
+        if not isinstance(data, dict):
+            return 0
+        pkg = str(data.get("package") or Path(file_path).parent.name or "uriprocess")
+        uris = data.get("public_uris") or []
+        desc_base = str(data.get("description") or f"URI process in {pkg}")
+        count = 0
+        for raw_uri in uris:
+            uri = str(raw_uri or "").strip()
+            if not uri or "://" not in uri:
+                continue
+            parts = uri.split("://")[-1].strip("/").split("/")
+            app = parts[0] if parts else pkg
+            proc_sub = ".".join(parts[1:]) if len(parts) > 1 else "run"
+            proc_name = f"{app}.{proc_sub}"
+            record = ProcedureRecord(
+                app=app,
+                proc=proc_name,
+                uri=uri,
+                desc=f"[{pkg}] {desc_base} ({uri})",
+                effect="mutating" if any(w in uri for w in ("run", "modify", "relocate", "upsert", "heal")) else "pure",
+                transport={"type": "cdylib", "package": pkg},
+                schema={"input": {"type": "object"}, "output": {"type": "object"}},
+                manifest_path=file_path,
+            )
+            self.procedures[proc_name] = record
+            count += 1
+        return count
+
+    def _register_builtin_dockuri_runtime(self, root: Path) -> int:
+        """Register built-in Dockuri system URI processes for the dockuri runtime repository."""
+        builtins = [
+            ("system", "system.sprint.deduplicate.v1", "proc://system/sprint/deduplicate/v1", "Deduplicate .planfile/sprints/current.yaml and reconcile done/stale tickets across projects", "mutating"),
+            ("system", "system.process.manage.v1", "proc://system/process/manage/v1", "Generate, modify, relocate, extract, catalog, and render snippets for URI processes", "mutating"),
+            ("system", "system.process.prompt_registry.v1", "proc://system/process/prompt-registry/v1", "Generate prompt-tailored URI command shortlist, TOON bounded registry, and constrained JSON Schema for LLM", "pure"),
+            ("system", "system.process.llm_context.v1", "proc://system/process/llm-context/v1", "Emit bounded TOON registry and constrained JSON Schema for LLM context injection", "pure"),
+            ("system", "system.worktree.promote.v1", "proc://system/worktree/promote/v1", "Promote verified worktrees onto main and prune clean detached staging checkouts", "mutating"),
+        ]
+        mpath = str(root / "python" / "dockuri_uri.py")
+        count = 0
+        for app, proc_name, uri, desc, effect in builtins:
+            if proc_name not in self.procedures:
+                self.procedures[proc_name] = ProcedureRecord(
+                    app=app,
+                    proc=proc_name,
+                    uri=uri,
+                    desc=desc,
+                    effect=effect,
+                    transport={"type": "in-process", "module": "dockuri_uri"},
+                    schema={"input": {"type": "object"}, "output": {"type": "object"}},
+                    manifest_path=mpath,
+                )
+                count += 1
+        return count
+
     def register_apx_manifest(self, data: dict[str, Any], file_path: str) -> int:
         """Adapt an apx.yaml into canonical ProcedureRecords."""
         app = data.get("name") or data.get("id", "app")
@@ -246,50 +360,30 @@ class DockuriRegistry:
         return count
 
     def search_for_nl(self, nl_query: str, limit: int = 5) -> list[ProcedureRecord]:
-        """Simple lexical and semantic retrieval matching NL intent against procedures with stemming."""
-        def _stem(w: str) -> str:
-            w = w.lower().strip()
-            if w.startswith("z") and len(w) > 4 and w[1] in "bcdfgjklmnprstvwz":
-                w = w[1:]
-            for pref in ("wy", "od", "po", "roz", "za", "prze"):
-                if w.startswith(pref) and len(w) > len(pref) + 3:
-                    w = w[len(pref):]
-                    break
-            return (
-                w.replace("k", "c")
-                .replace("ń", "n")
-                .replace("ó", "o")
-                .replace("ą", "a")
-                .replace("ę", "e")
-                .replace("ś", "s")
-                .replace("ł", "l")
-                .replace("ż", "z")
-                .replace("ź", "z")
-            )
-
+        """Fast pre-tokenized lexical and stem retrieval matching NL intent against procedures."""
         raw_tokens = [t for t in re.findall(r"\w+", nl_query.lower()) if len(t) > 1]
-        stems = {_stem(t) for t in raw_tokens}
+        stems = {_stem_token(t) for t in raw_tokens}
         scored: list[tuple[float, ProcedureRecord]] = []
 
         for record in self.procedures.values():
             score = 0.0
-            search_corpus = f"{record.app} {record.proc} {record.desc} {record.uri}".lower()
-            corpus_tokens = [t for t in re.findall(r"\w+", search_corpus) if len(t) > 1]
-            corpus_stems = {_stem(t) for t in corpus_tokens}
-
             for tok in raw_tokens:
-                if tok in record.proc.lower() or tok in record.uri.lower():
+                if tok in record._proc_lower or tok in record._uri_lower:
                     score += 3.0
-                elif tok in record.desc.lower():
+                elif tok in record._desc_lower:
                     score += 1.5
-                elif tok in record.app.lower():
+                elif tok in record._app_lower:
                     score += 1.0
 
             for st in stems:
-                for c_st in corpus_stems:
-                    if st == c_st or (len(st) >= 4 and len(c_st) >= 4 and (st.startswith(c_st[:4]) or c_st.startswith(st[:4]))):
-                        score += 1.0
-                        break
+                if st in record._corpus_stems:
+                    score += 1.0
+                elif len(st) >= 4:
+                    prefix = st[:4]
+                    for c_st in record._corpus_stems:
+                        if len(c_st) >= 4 and (st.startswith(c_st[:4]) or c_st.startswith(prefix)):
+                            score += 1.0
+                            break
 
             if score > 0:
                 scored.append((score, record))
@@ -333,16 +427,16 @@ class DockuriRegistry:
         )
 
 
-_REGISTRY_CACHE: dict[str, tuple[int, DockuriRegistry]] = {}
+_REGISTRY_CACHE: dict[tuple[str, int], tuple[int, DockuriRegistry]] = {}
 
 
-def get_cached_registry(root_dir: str | Path) -> DockuriRegistry:
+def get_cached_registry(root_dir: str | Path, max_depth: int = 3) -> DockuriRegistry:
     """Return an mtime-cached DockuriRegistry for root_dir to avoid repeated os.walk scans."""
     resolved = Path(root_dir).resolve()
-    key = str(resolved)
+    key = (str(resolved), max_depth)
     try:
         mtime = resolved.stat().st_mtime_ns
-        for mname in ("dockuri.yaml", "dockuri.yml", "dockuri.json", "apx.yaml", "connector.manifest.json"):
+        for mname in ("dockuri.yaml", "dockuri.yml", "dockuri.json", "uriprocess.json", "apx.yaml", "connector.manifest.json"):
             mf = resolved / mname
             if mf.is_file():
                 mtime ^= mf.stat().st_mtime_ns
@@ -352,7 +446,8 @@ def get_cached_registry(root_dir: str | Path) -> DockuriRegistry:
     if cached is not None and cached[0] == mtime:
         return cached[1]
     reg = DockuriRegistry()
-    reg.scan_path(resolved)
+    reg.scan_path(resolved, max_depth=max_depth)
     _REGISTRY_CACHE[key] = (mtime, reg)
     return reg
+
 
