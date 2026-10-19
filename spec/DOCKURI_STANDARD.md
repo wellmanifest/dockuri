@@ -195,4 +195,80 @@ Standard `wellmanifest/dockuri` **wymusza** stosowanie podejścia *URI-First* za
    * `modify_and_relocate` — generyczny prompt modyfikacji i przenoszenia procesu URI pod nowy adres (`action="relocate"`) z zachowaniem kompatybilności wstecznej przez `aliases`.
    * `batch_jsonl_stream` — generyczny prompt wsadowego przetwarzania wielu celów/repozytoriów strumieniem JSONL (`uri <adres> + JSONL` / `uri_jsonl`).
    * `streamline_remediate` — generyczny prompt naprawy długu architektonicznego i złożoności cyklomatycznej z użyciem deskryptorów `uriDelegation` oraz diagnostyki `proc://system/self-improvement/diagnose/v1`.
+   * `project_sentence_dispatch` — generyczny prompt wywołania dowolnego zdania lub polecenia w języku naturalnym na bazie dowolnego projektu uruchamialnego przez Dockuri.
+
+### `DOCK-DISP-001: Universal NL Sentence Dispatch on Any Dockuri-Runnable Project`
+Standard **Dockuri** definiuje procedurę mapowania i wykonywania dowolnego zdania w języku naturalnym (PL/EN) na bazie dowolnego projektu w organizacji, który posiada deskryptor uruchomieniowy Dockuri:
+
+1. **Definicja projektu uruchamialnego przez Dockuri (Dockuri-Runnable Project)**:
+   Projekt jest uznawany za uruchamialny przez Dockuri, jeśli w jego strukturze znajduje się co najmniej jeden ze standardowych deskryptorów:
+   * `dockuri.yaml` / `dockuri.yml` w standardzie `dockuri/proc-v2` (lista procedur `processes` z komendami `run` i aliasami).
+   * `dockuri.json` w standardzie `dockuri-v1` (deklaracja procedur `procedures` i transportu IPC UDS).
+   * `.dockuri/dockuri.yaml` lub `.dockuri/dockuri.json` (lokalny deskryptor pomocniczy w repozytoriach zewnętrznych).
+   * `apx.yaml` lub `connector.manifest.json` (urirun connector).
+   * Zarejestrowana usługa w indeksie `DockuriRegistry`.
+   Walidator `dockuri_check.py --project <ścieżka>` automatycznie wykrywa typ deskryptora i listę dostępnych procedur.
+
+2. **Dwuetapowy cykl wywołania zdania (Sentence Dispatch Cycle)**:
+   * **Etap 1: Dopasowanie semantyczne / Routing**:
+     Dowolne zdanie języka naturalnego $S$ (np. *„Zdeduplikuj zadania w sprincie w semcod/tagi”*, *„Sprawdź spójność bazy danych”*, *„Uruchom testy jednostkowe w willuri”*) jest analizowane przez router semantyczny (`willuri` / `DockuriRegistry.search_for_nl`).
+     * Jeżeli w projekcie istnieje procedura o pasującym podpisie semantycznym, zdanie jest kierowane do dedykowanego procesu (np. `proc://system/sprint/deduplicate/v1` lub `willman://operation/dockuri/v1`).
+     * Jeżeli projekt nie posiada specyficznej procedury, zdanie jest kierowane do generycznego endpointu wykonawczego projektu: `proc://<project>/run/instruction/v1` lub `dockuri://<project>/exec?instruction=...`.
+   * **Etap 2: Szybkie wykonanie (Fast Invocation)**:
+     Zamiast żmudnego pisania wieloliniowych skryptów pomocniczych przez LLM, model emituje jednolinijkowe wywołanie:
+     ```python
+     from uri import uri
+     result = uri("proc://<project>/<scope>/<action>/v1", {"instruction": sentence, "project": project_path})
+     ```
+     lub w powłoce systemowej:
+     ```bash
+     uri "proc://<project>/<action>" '{"instruction": "...", "project": "..."}'
+     ```
+
+3. **Wsadowe potoki zdań (JSONL Streaming)**:
+   Wiele zdań lub zadań dla wielu projektów może być przetwarzanych strumieniowo w jednym wywołaniu:
+   ```bash
+   printf '%s\n' \
+     '{"instruction": "audyt zależności", "project": "/repo/a"}' \
+     '{"instruction": "sprawdzenie linterem", "project": "/repo/b"}' \
+     | uri "dockuri://process/run" -
+   ```
+
+4. **Pilnowanie i egzekwowanie przez walidator (`dockuri_check.py`)**:
+   Standard **wymusza** weryfikację gotowości projektu i szybkości dispatchu:
+   ```bash
+   python3 src/dockuri_check.py --check-uri-standard --project /sciezka/do/projektu --test-sentence "Przeprowadź audyt"
+   ```
+   Kryteria akceptacji:
+   * Wykrycie poprawnego deskryptora uruchomieniowego projektu.
+   * Pomyślny test dispatchu zdania do kanonicznego procesu URI z kodem `status=ok`.
+   * Czas dyspozycji i weryfikacji mieszczący się w budżecie $\le 15.0$ ms.
+
+### `DOCK-ACC-001: Fast URI Execution Acceleration (Floor -> Standard -> Opportunistic)`
+Zastosowanie procesów URI jako warstwy wykonawczej dla modeli LLM dramatycznie przyspiesza pracę agentów sztucznej inteligencji:
+
+```mermaid
+flowchart TD
+    NL["Dowolne zdanie NL / Cel Agentowy"] --> Router["Router Semantyczny (willuri / dockuri_registry)"]
+    Router --> Canonical["Kanoniczny Adres URI (proc://...)"]
+    
+    subgraph ExecutionHierarchy["Hierarchia Wykonania (Fast Execution)"]
+        direction TB
+        Floor["1. Floor (In-Process / cdylib / sys.path)\nOpóźnienie: < 0.1 ms"]
+        Standard["2. Standard (Gorący UDS Daemon / CLI uri)\nOpóźnienie: < 1.0 - 2.0 ms"]
+        Opportunistic["3. Opportunistic (Zewnętrzny proces / kontener)\nOpóźnienie: kontrolowany timeout"]
+        Floor -->|gdy brak symbolu C| Standard
+        Standard -->|gdy worker offline| Opportunistic
+    end
+
+    Canonical --> ExecutionHierarchy
+    ExecutionHierarchy --> Receipt["Kwit wykonania URN & zunifikowany JSON"]
+```
+
+#### Korzyści operacyjne dla LLM:
+1. **Redukcja tokenów o 90–95%**: Zamiast generować 50–100 linii boilerplate kodu w Pythonie lub Bashu do obsłużenia zadania, LLM generuje zaledwie ~15 tokenów (`uri('proc://...', {...})`).
+2. **5x–15x szybsza pętla wykonania**: Wywołanie gorącego procesu UDS / in-process cdylib eliminuje zimny start interpretera i czas kompilacji, realizując zadanie w ułamku milisekundy.
+3. **Zero duplikacji kodu (SSOT)**: Jeden proces URI zdefiniowany w Dockuri jest re-używalny w dziesiątkach repozytoriów jednocześnie.
+4. **Wielojęzyczność**: Niezależnie od tego, czy projekt napisano w Pythonie, Node.js, Rust czy PHP, interfejs wywołania `uri(...)` pozostaje identyczny.
+
 

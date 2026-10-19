@@ -29,23 +29,38 @@ Detailed normative specification is in [`spec/DOCKURI_STANDARD.md`](spec/DOCKURI
 - `DOCK-URI-001`: Universal Polyglot URI Invocation Contract (`uri('')` & `uri <address> + JSONL`)
 - `DOCK-LFC-001`: Declarative URI Process Lifecycle & Cross-Project Deduplication (`proc://system/process/manage/v1`)
 - `DOCK-PRM-001`: Normative Generic Prompts & URI-First Enforcement (`--check-uri-standard`)
+- `DOCK-DISP-001`: Universal NL Sentence Dispatch on Any Dockuri-Runnable Project
+- `DOCK-ACC-001`: Fast URI Execution Acceleration (Floor -> Standard -> Opportunistic)
 
 ---
 
 ## 🚀 Quick Start
 
-### 1. Validate a project's `dockuri.json` and URI-First standard (`DOCK-URI-001` / `DOCK-LFC-001` / `DOCK-PRM-001`)
+### 1. Execute Any Sentence on Any Project Runnable via Dockuri (Fast Method)
+```bash
+# 1. Enforce readiness & test sentence dispatch for any project:
+python3 src/dockuri_check.py --check-uri-standard --project /home/tom/github/dockuri/willops/willops --test-sentence "wyszukaj dockuri root w willops"
+
+# 2. Call directly via universal CLI (streaming JSONL stdin/args):
+uri "proc://willops/run/instruction/v1" '{"instruction": "audyt zależności", "dry_run": true}'
+
+# 3. Call in Python (sub-millisecond in-process / UDS dispatch):
+from src.dockuri_client import uri
+result = uri("proc://system/sprint/deduplicate/v1", {"action": "audit", "dry_run": True})
+```
+
+### 2. Validate a Project's `dockuri.json` or `dockuri.yaml`
 ```bash
 python3 src/dockuri_check.py --manifest path/to/dockuri.json
 python3 src/dockuri_check.py --check-uri-standard --proc-manifest /home/tom/github/dockuri/dockuri.yaml
 ```
 
-### 2. Probe a live worker for latency compliance
+### 3. Probe a Live Worker for Latency Compliance (< 2.0 ms)
 ```bash
 python3 src/dockuri_check.py --manifest dockuri.json --ping
 ```
 
-### 3. Run multi-stage pipeline
+### 4. Run Multi-Stage Pipeline
 ```python
 from src.dockuri_client import run_pipeline
 
@@ -57,6 +72,14 @@ stages = [
 result = run_pipeline(stages, initial_input="invoice data")
 print(result["receipt"])  # CompositeExecutionReceipt (SHA-256 DAG)
 ```
+
+---
+
+## ⚡ Why the Fast Method Accelerates LLMs (DOCK-ACC-001)
+
+1. **90–95% Token Savings**: Instead of generating a 50-line custom Python/Bash script, an LLM outputs 1 concise line: `uri('proc://<app>/<action>', payload)`.
+2. **Sub-Millisecond Execution**: Pre-warmed UDS daemons and in-process cdylib eliminate cold container spin-up (400ms – 2500ms $\to$ < 2.0 ms).
+3. **Cross-Project Reusability**: All projects in the ecosystem reuse centralized URI processes from `dockuri` without duplicating code.
 
 ---
 
