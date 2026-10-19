@@ -194,12 +194,11 @@ def inspect_project_dockuri_readiness(project_path: Path) -> dict[str, Any]:
             break
 
     try:
-        from .dockuri_registry import DockuriRegistry
+        from .dockuri_registry import get_cached_registry
     except ImportError:
-        from dockuri_registry import DockuriRegistry  # type: ignore
+        from dockuri_registry import get_cached_registry  # type: ignore
 
-    reg = DockuriRegistry()
-    reg.scan_path(target)
+    reg = get_cached_registry(target)
     procs = list(reg.procedures.values())
 
     return {
@@ -221,15 +220,14 @@ def check_sentence_dispatch(
     t0 = time.perf_counter()
 
     try:
-        from .dockuri_registry import DockuriRegistry
+        from .dockuri_registry import get_cached_registry
         from .dockuri_client import register_uri_process, uri
     except ImportError:
-        from dockuri_registry import DockuriRegistry  # type: ignore
+        from dockuri_registry import get_cached_registry  # type: ignore
         from dockuri_client import register_uri_process, uri  # type: ignore
 
     target = project_path.resolve()
-    reg = DockuriRegistry()
-    reg.scan_path(target)
+    reg = get_cached_registry(target)
 
     matched = reg.search_for_nl(sentence, limit=3)
     if matched:
@@ -270,13 +268,15 @@ def check_uri_standard_conformance(
     project_path: Path | None = None,
     test_sentence: str | None = None,
 ) -> dict[str, Any]:
-    """Enforce DOCK-URI-001, DOCK-LFC-001, DOCK-PRM-001, and DOCK-DISP-001 across wellmanifest/dockuri."""
+    """Enforce DOCK-URI-001, DOCK-LFC-001, DOCK-PRM-001, DOCK-DISP-001, and DOCK-MCP-001 across wellmanifest/dockuri."""
     try:
         from .dockuri_client import render_uri_call_snippet, uri, uri_jsonl
         from .dockuri_llm_pipeline import GENERIC_URI_PROMPTS, build_generic_uri_prompt
+        from .dockuri_mcp import MCP_TOOLS_SPEC, TOOL_DISPATCHERS, process_jsonrpc_request
     except ImportError:
         from dockuri_client import render_uri_call_snippet, uri, uri_jsonl  # type: ignore
         from dockuri_llm_pipeline import GENERIC_URI_PROMPTS, build_generic_uri_prompt  # type: ignore
+        from dockuri_mcp import MCP_TOOLS_SPEC, TOOL_DISPATCHERS, process_jsonrpc_request  # type: ignore
 
     # 1. DOCK-URI-001: Verify uri(), uri_jsonl(), and polyglot snippet generation
     if not callable(uri) or not callable(uri_jsonl):
@@ -321,14 +321,24 @@ def check_uri_standard_conformance(
     sample_sentence = test_sentence or "Przeprowadź audyt stanu projektu i wykonaj testy"
     dispatch_report = check_sentence_dispatch(target_proj, sample_sentence)
 
+    # 5. DOCK-MCP-001: Verify MCP Server Tools & Sub-Millisecond Handshake
+    t_mcp0 = time.perf_counter()
+    mcp_init = process_jsonrpc_request({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
+    mcp_list = process_jsonrpc_request({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
+    mcp_ms = round((time.perf_counter() - t_mcp0) * 1000.0, 3)
+    if not mcp_init or not mcp_list or len(MCP_TOOLS_SPEC) < 6 or not set(TOOL_DISPATCHERS).issuperset({t["name"] for t in MCP_TOOLS_SPEC}):
+        raise AssertionError("DOCK-MCP-001 violation: MCP tools specification or dispatcher incomplete")
+
     proc_report = None
     if proc_manifest_path is not None:
         proc_report = validate_proc_v2_manifest(proc_manifest_path)
 
     return {
         "status": "PASS",
-        "rules_enforced": ["DOCK-URI-001", "DOCK-LFC-001", "DOCK-PRM-001", "DOCK-DISP-001"],
+        "rules_enforced": ["DOCK-URI-001", "DOCK-LFC-001", "DOCK-PRM-001", "DOCK-DISP-001", "DOCK-MCP-001"],
         "generic_prompts_verified": len(REQUIRED_PROMPT_IDS),
+        "mcp_tools_verified": len(MCP_TOOLS_SPEC),
+        "mcp_handshake_ms": mcp_ms,
         "proc_manifest": proc_report,
         "project_readiness": proj_report,
         "sentence_dispatch": dispatch_report,

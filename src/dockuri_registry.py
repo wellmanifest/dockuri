@@ -331,3 +331,28 @@ class DockuriRegistry:
             'object ::= "{" [^\\}]* "}"\n'
             'ws ::= [ \\t\\n]*\n'
         )
+
+
+_REGISTRY_CACHE: dict[str, tuple[int, DockuriRegistry]] = {}
+
+
+def get_cached_registry(root_dir: str | Path) -> DockuriRegistry:
+    """Return an mtime-cached DockuriRegistry for root_dir to avoid repeated os.walk scans."""
+    resolved = Path(root_dir).resolve()
+    key = str(resolved)
+    try:
+        mtime = resolved.stat().st_mtime_ns
+        for mname in ("dockuri.yaml", "dockuri.yml", "dockuri.json", "apx.yaml", "connector.manifest.json"):
+            mf = resolved / mname
+            if mf.is_file():
+                mtime ^= mf.stat().st_mtime_ns
+    except OSError:
+        mtime = 0
+    cached = _REGISTRY_CACHE.get(key)
+    if cached is not None and cached[0] == mtime:
+        return cached[1]
+    reg = DockuriRegistry()
+    reg.scan_path(resolved)
+    _REGISTRY_CACHE[key] = (mtime, reg)
+    return reg
+

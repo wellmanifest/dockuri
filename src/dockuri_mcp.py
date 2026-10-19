@@ -29,7 +29,7 @@ try:
         inspect_project_dockuri_readiness,
     )
     from .dockuri_client import render_uri_call_snippet, uri, uri_jsonl
-    from .dockuri_registry import DockuriRegistry
+    from .dockuri_registry import DockuriRegistry, get_cached_registry
 except ImportError:
     from dockuri_check import (  # type: ignore
         check_sentence_dispatch,
@@ -37,7 +37,7 @@ except ImportError:
         inspect_project_dockuri_readiness,
     )
     from dockuri_client import render_uri_call_snippet, uri, uri_jsonl  # type: ignore
-    from dockuri_registry import DockuriRegistry  # type: ignore
+    from dockuri_registry import DockuriRegistry, get_cached_registry  # type: ignore
 
 
 MCP_TOOLS_SPEC: List[Dict[str, Any]] = [
@@ -189,6 +189,34 @@ MCP_TOOLS_SPEC: List[Dict[str, Any]] = [
             },
         },
     },
+    {
+        "name": "dockuri_prompt_registry",
+        "description": "Generate a prompt-tailored URI command shortlist, TOON bounded registry, and constrained JSON Schema for LLM tool calls.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Natural language task or prompt query"},
+                "top_k": {"type": "integer", "default": 8, "description": "Number of top matching URI processes"},
+                "project": {"type": "string", "description": "Optional project root directory"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "dockuri_provider_config",
+        "description": "Return ready-to-use MCP client configurations and CLI commands for Google Antigravity/Gemini, OpenAI Codex, Anthropic Claude, IDE, and Shell CLI.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "provider": {
+                    "type": "string",
+                    "enum": ["all", "google", "antigravity", "gemini", "codex", "claude", "ide", "shell"],
+                    "default": "all",
+                },
+                "command": {"type": "string", "default": "dockuri-mcp"},
+            },
+        },
+    },
 ]
 
 
@@ -202,9 +230,8 @@ def handle_execute_sentence(args: Dict[str, Any]) -> Dict[str, Any]:
     t0 = time.perf_counter()
     readiness = inspect_project_dockuri_readiness(project_path)
 
-    # Search for matching procedure
-    reg = DockuriRegistry()
-    reg.scan_path(project_path)
+    # Search for matching procedure using cached registry (single scan)
+    reg = get_cached_registry(project_path)
     matched = reg.search_for_nl(sentence, limit=3)
 
     if matched:
@@ -258,8 +285,7 @@ def handle_search_procedures(args: Dict[str, Any]) -> Dict[str, Any]:
     scan_dir = Path(project_str).resolve() if project_str else Path(os.getcwd())
 
     t0 = time.perf_counter()
-    reg = DockuriRegistry()
-    reg.scan_path(scan_dir)
+    reg = get_cached_registry(scan_dir)
     results = reg.search_for_nl(query, limit=limit)
     t1 = time.perf_counter()
 
@@ -330,6 +356,73 @@ def handle_check_conformance(args: Dict[str, Any]) -> Dict[str, Any]:
     )
 
 
+def handle_prompt_registry(args: Dict[str, Any]) -> Dict[str, Any]:
+    t0 = time.perf_counter()
+    query = args["query"]
+    top_k = int(args.get("top_k", 8))
+    req: Dict[str, Any] = {"action": "llm_context", "query": query, "top_k": top_k}
+    if args.get("project"):
+        mf = Path(args["project"]).resolve() / "dockuri.yaml"
+        if mf.is_file():
+            req["manifest"] = str(mf)
+    res = uri("proc://system/process/prompt-registry/v1", req)
+    if isinstance(res, dict):
+        res["duration_ms"] = round((time.perf_counter() - t0) * 1000.0, 3)
+        return res
+    return {"status": "ok", "results": res, "duration_ms": round((time.perf_counter() - t0) * 1000.0, 3)}
+
+
+def handle_provider_config(args: Dict[str, Any]) -> Dict[str, Any]:
+    provider = str(args.get("provider") or "all").lower()
+    command = str(args.get("command") or "dockuri-mcp")
+    mcp_entry = {"command": command, "args": ["--stdio"]}
+    providers = {
+        "google": {
+            "provider": "google",
+            "clients": ["Google Antigravity IDE/CLI", "Gemini CLI"],
+            "config_paths": ["~/.gemini/settings.json", "~/.gemini/antigravity-cli/mcp/dockuri/config.json"],
+            "cli_install": f"gemini mcp add dockuri -- {command} --stdio",
+            "mcpServers": {"dockuri": mcp_entry},
+        },
+        "codex": {
+            "provider": "codex",
+            "clients": ["OpenAI Codex CLI", "Codex IDE"],
+            "config_paths": ["~/.codex/config.toml"],
+            "cli_install": f"codex mcp add dockuri -- {command} --stdio",
+            "toml_config": f'[mcp_servers.dockuri]\ncommand = "{command}"\nargs = ["--stdio"]\n',
+            "mcpServers": {"dockuri": mcp_entry},
+        },
+        "claude": {
+            "provider": "claude",
+            "clients": ["Anthropic Claude Code CLI", "Claude Desktop"],
+            "config_paths": ["~/.claude.json", "~/.config/Claude/claude_desktop_config.json"],
+            "cli_install": f"claude mcp add dockuri -- {command} --stdio",
+            "mcpServers": {"dockuri": mcp_entry},
+        },
+        "ide": {
+            "provider": "ide",
+            "clients": ["Cursor", "VS Code", "Windsurf", "Zed"],
+            "config_paths": [".cursor/mcp.json", ".vscode/mcp.json"],
+            "mcpServers": {"dockuri": mcp_entry},
+        },
+        "shell": {
+            "provider": "shell",
+            "clients": ["Bash/Zsh CLI", "CI/CD Pipelines"],
+            "commands": {
+                "single_call": 'uri "proc://system/sprint/deduplicate/v1" \'{"dry_run":true}\'',
+                "prompt_registry": 'uri --prompt "deduplicate sprint tickets" 5',
+            },
+        },
+    }
+    alias_map = {"antigravity": "google", "gemini": "google"}
+    key = alias_map.get(provider, provider)
+    if key == "all":
+        return {"status": "ok", "provider": "all", "providers": providers}
+    if key not in providers:
+        raise ValueError(f"Unsupported provider: {provider}")
+    return {"status": "ok", **providers[key]}
+
+
 TOOL_DISPATCHERS: Dict[str, Callable[[Dict[str, Any]], Any]] = {
     "dockuri_execute_sentence": handle_execute_sentence,
     "dockuri_call_uri": handle_call_uri,
@@ -337,6 +430,8 @@ TOOL_DISPATCHERS: Dict[str, Callable[[Dict[str, Any]], Any]] = {
     "dockuri_list_projects": handle_list_projects,
     "dockuri_manage_process": handle_manage_process,
     "dockuri_check_conformance": handle_check_conformance,
+    "dockuri_prompt_registry": handle_prompt_registry,
+    "dockuri_provider_config": handle_provider_config,
 }
 
 

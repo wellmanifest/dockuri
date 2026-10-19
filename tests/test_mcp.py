@@ -109,3 +109,36 @@ def test_mcp_call_execute_sentence(tmp_path: Path):
     assert data["status"] == "ok"
     assert data["matched_uri"] == "proc://mock/sprint/v1"
     assert data["duration_ms"] <= 100.0
+
+
+def test_mcp_provider_config_and_prompt_registry():
+    for prov in ("all", "google", "antigravity", "gemini", "codex", "claude", "ide", "shell"):
+        req = {
+            "jsonrpc": "2.0",
+            "id": 10,
+            "method": "tools/call",
+            "params": {
+                "name": "dockuri_provider_config",
+                "arguments": {"provider": prov},
+            },
+        }
+        res = process_jsonrpc_request(req)
+        assert res["result"]["isError"] is False
+        data = json.loads(res["result"]["content"][0]["text"])
+        assert data["status"] == "ok"
+
+    reg_req = {
+        "jsonrpc": "2.0",
+        "id": 11,
+        "method": "tools/call",
+        "params": {
+            "name": "dockuri_prompt_registry",
+            "arguments": {"query": "deduplicate sprint tickets", "top_k": 4},
+        },
+    }
+    reg_res = process_jsonrpc_request(reg_req)
+    assert reg_res["result"]["isError"] is False
+    reg_data = json.loads(reg_res["result"]["content"][0]["text"])
+    assert reg_data["status"] == "ok"
+    assert reg_data["duration_ms"] <= 100.0
+
