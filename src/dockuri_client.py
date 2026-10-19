@@ -320,7 +320,13 @@ def _invoke_single(clean_uri: str, params: dict[str, Any], socket_path: str | No
                 except Exception:
                     pass
 
-    if params.get("dry_run") and clean_uri.endswith("/run/instruction/v1"):
+    if params.get("dry_run") and (
+        clean_uri.endswith("/run/instruction/v1")
+        or (
+            clean_uri.startswith("proc://")
+            and not clean_uri.startswith(("proc://system/", "proc://willrust/", "proc://ast-scan/", "proc://uri-router/", "proc://willgit/"))
+        )
+    ):
         return {"status": "ok", "uri": clean_uri, "dry_run": True, "dispatched": True, "echo": params}
 
     sock = socket_path or params.pop("_socket", None) or os.environ.get("DOCKURI_SOCKET")

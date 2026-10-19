@@ -94,6 +94,8 @@ EXCLUDED_DIRS = {
     "dist", "build", ".pytest_cache", ".cache", ".idea", ".vscode",
     ".worktrees", ".subactor", ".code2llm_cache", "logs", "conversations",
     ".rescue", "archive", "benchmarks", "evidence", "wheels", "__pycache__",
+    "tests", "test", "docs", "assets", "public", "coverage", "htmlcov",
+    "vendor", "third_party", "tmp", "out", ".planfile", ".wup", ".tox", ".mypy_cache",
 }
 
 
@@ -175,7 +177,7 @@ class DockuriRegistry:
                 except Exception:
                     pass
 
-        if (root / "python" / "dockuri_uri.py").is_file():
+        if (root / "python" / "dockuri_uri.py").is_file() or (root / ".planfile").is_dir():
             count += self._register_builtin_dockuri_runtime(root)
 
         return count
@@ -318,6 +320,8 @@ class DockuriRegistry:
             ("system", "system.process.prompt_registry.v1", "proc://system/process/prompt-registry/v1", "Generate prompt-tailored URI command shortlist, TOON bounded registry, and constrained JSON Schema for LLM", "pure"),
             ("system", "system.process.llm_context.v1", "proc://system/process/llm-context/v1", "Emit bounded TOON registry and constrained JSON Schema for LLM context injection", "pure"),
             ("system", "system.worktree.promote.v1", "proc://system/worktree/promote/v1", "Promote verified worktrees onto main and prune clean detached staging checkouts", "mutating"),
+            ("system", "system.self_improvement.diagnose.v1", "proc://system/self-improvement/diagnose/v1", "Przeprowadź audyt stanu projektu, diagnostykę autonomii i wykonaj testy", "pure"),
+            ("system", "system.queue.heal.v1", "proc://system/queue/heal/v1", "Audit and heal stalled task queues and expired leases", "mutating"),
         ]
         mpath = str(root / "python" / "dockuri_uri.py")
         count = 0
