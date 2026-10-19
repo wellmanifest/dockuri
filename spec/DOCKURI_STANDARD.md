@@ -179,6 +179,20 @@ Aby wyeliminować duplikację skryptów pomocniczych w skali wszystkich projekt�
 ### `DOCK-LFC-001: Declarative URI Process Lifecycle & Cross-Project Deduplication (proc://system/process/manage/v1)`
 Procesy URI są centralnie generowane, modyfikowane i przenoszone (relokowane) za pomocą metaprocesu `proc://system/process/manage/v1`:
 1. **`action=generate | modify | upsert`**: Rejestruje lub aktualizuje proces `dockuri/proc-v2` w manifeście `dockuri.yaml` wraz z wygenerowanymi snippetami poliglotycznymi (`python`, `bash`, `js`, `rust`) i kwitem `receipt_urn`.
-2. **`action=relocate | move | rename`**: Przenosi definicję procesu URI pomiędzy manifestami projektów lub zmienia jego kanoniczny adres URI z zachowaniem ciągłości audytowej.
+2. **`action=relocate | move | rename`**: Przenosi definicję procesu URI pomiędzy manifestami projektów lub zmienia jego kanoniczny adres URI z zachowaniem ciągłości audytowej (poprzedni adres trafia do `aliases`).
 3. **`action=snippet`**: Zwraca gotowy kod wywołania `uri('<target_uri>', ...)` dla wybranego języka.
+
+### `DOCK-PRM-001: Normative Generic Prompts & URI-First Enforcement`
+Standard `wellmanifest/dockuri` **wymusza** stosowanie podejścia *URI-First* zarówno na poziomie walidatora (`dockuri_check.py --check-uri-standard`), jak i na poziomie zunifikowanych promptów generycznych (`GENERIC_URI_PROMPTS` w `dockuri_llm_pipeline.py`):
+
+1. **Wymuszenie w walidatorze (`dockuri_check.py`)**:
+   * Walidator sprawdza poprawność katalogu `dockuri/proc-v2` (`dockuri.yaml`), unikalność kanonicznych adresów `uri` oraz ciągłość aliasów (`aliases`) po relokacji (`DOCK-LFC-001`).
+   * Walidator weryfikuje dostępność kontraktu `uri()` / `uri_jsonl()`, obecność metaprocesu `proc://system/process/manage/v1` oraz kompletność normatywnych szablonów promptów generycznych (`DOCK-PRM-001`).
+2. **Wymagane szablony promptów generycznych (`GENERIC_URI_PROMPTS`)**:
+   * `system_uri_first` — generyczna instrukcja systemowa nakazująca agentowi sprawdzenie katalogu `uri --catalog` przed napisaniem nowego skryptu pomocniczego i wywoływanie istniejących procesów przez `uri('<adres>', payload)` lub `uri_jsonl('<adres>', lines)`.
+   * `discover_and_run` — generyczny prompt odkrywania i uruchamiania procesu URI dla dowolnego zadania w repozytorium.
+   * `extract_to_dockuri` — generyczny prompt ekstrakcji powtarzalnej logiki z dowolnego pliku do centralnego procesu w `dockuri` (`action="generate"` w `proc://system/process/manage/v1`) i zastąpienia duplikatu wywołaniem `uri(...)`.
+   * `modify_and_relocate` — generyczny prompt modyfikacji i przenoszenia procesu URI pod nowy adres (`action="relocate"`) z zachowaniem kompatybilności wstecznej przez `aliases`.
+   * `batch_jsonl_stream` — generyczny prompt wsadowego przetwarzania wielu celów/repozytoriów strumieniem JSONL (`uri <adres> + JSONL` / `uri_jsonl`).
+   * `streamline_remediate` — generyczny prompt naprawy długu architektonicznego i złożoności cyklomatycznej z użyciem deskryptorów `uriDelegation` oraz diagnostyki `proc://system/self-improvement/diagnose/v1`.
 

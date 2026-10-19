@@ -205,10 +205,12 @@ def render_uri_call_snippet(
     target_uri: str,
     default_params: dict[str, Any] | None = None,
     lang: str = "python",
+    *,
+    language: str | None = None,
 ) -> str:
     """Render a minimal cross-language wrapper snippet calling `uri('<uri>', ...)` (DOCK-URI-001)."""
     sample = json.dumps(default_params or {}, ensure_ascii=False)
-    norm_lang = lang.strip().lower()
+    norm_lang = (language or lang).strip().lower()
     if norm_lang in ("sh", "bash", "shell"):
         return f"#!/usr/bin/env bash\nset -euo pipefail\nexec uri {json.dumps(target_uri)} \"${{1:-{sample}}}\"\n"
     if norm_lang in ("js", "javascript", "node", "ts", "typescript"):
@@ -252,6 +254,22 @@ def render_uri_call_snippet(
 def _invoke_single(clean_uri: str, params: dict[str, Any], socket_path: str | None = None) -> dict[str, Any]:
     if clean_uri in _CUSTOM_URI_HANDLERS:
         return _CUSTOM_URI_HANDLERS[clean_uri](params)
+
+    if clean_uri == "proc://system/process/manage/v1" and str(params.get("action") or "").strip().lower() == "snippet":
+        target_uri = str(params.get("target_uri") or params.get("uri") or "proc://system/sprint/deduplicate/v1")
+        defaults = params.get("defaults") if isinstance(params.get("defaults"), dict) else {}
+        lang = str(params.get("language") or params.get("lang") or "python")
+        return {
+            "status": "ok",
+            "action": "snippet",
+            "uri": target_uri,
+            "language": lang,
+            "snippet": render_uri_call_snippet(target_uri, defaults, lang=lang),
+            "call_snippets": {
+                k: render_uri_call_snippet(target_uri, defaults, lang=k)
+                for k in ("python", "bash", "js", "rust", "go", "php")
+            },
+        }
 
     sock = socket_path or params.pop("_socket", None) or os.environ.get("DOCKURI_SOCKET")
     if sock and os.path.exists(str(sock)):

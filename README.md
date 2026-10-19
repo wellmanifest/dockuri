@@ -26,14 +26,18 @@ Detailed normative specification is in [`spec/DOCKURI_STANDARD.md`](spec/DOCKURI
 - `DOCK-LFT-001`: Auto-Spawn and Graceful Fallback
 - `DOCK-PNG-001`: System Ping & Latency Budget (< 2.0 ms)
 - `DOCK-PIP-001`: Pipeline Composition & Composite Execution Receipt
+- `DOCK-URI-001`: Universal Polyglot URI Invocation Contract (`uri('')` & `uri <address> + JSONL`)
+- `DOCK-LFC-001`: Declarative URI Process Lifecycle & Cross-Project Deduplication (`proc://system/process/manage/v1`)
+- `DOCK-PRM-001`: Normative Generic Prompts & URI-First Enforcement (`--check-uri-standard`)
 
 ---
 
 ## 🚀 Quick Start
 
-### 1. Validate a project's `dockuri.json`
+### 1. Validate a project's `dockuri.json` and URI-First standard (`DOCK-URI-001` / `DOCK-LFC-001` / `DOCK-PRM-001`)
 ```bash
 python3 src/dockuri_check.py --manifest path/to/dockuri.json
+python3 src/dockuri_check.py --check-uri-standard --proc-manifest /home/tom/github/dockuri/dockuri.yaml
 ```
 
 ### 2. Probe a live worker for latency compliance

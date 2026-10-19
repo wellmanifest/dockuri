@@ -75,3 +75,34 @@ def test_uri_main_cli(capsys):
     assert rc == 0
     out = json.loads(capsys.readouterr().out.strip())
     assert out == {"status": "ok", "value": 42}
+
+
+def test_generic_prompts_and_uri_standard_conformance(tmp_path: Path):
+    from src.dockuri_check import check_uri_standard_conformance, validate_proc_v2_manifest
+    from src.dockuri_llm_pipeline import GENERIC_URI_PROMPTS, build_generic_uri_prompt
+
+    for pid in GENERIC_URI_PROMPTS:
+        pl_text = build_generic_uri_prompt(pid, lang="pl", project_root="/repo/demo")
+        en_text = build_generic_uri_prompt(pid, lang="en", project_root="/repo/demo")
+        assert "uri" in pl_text
+        assert "uri" in en_text
+
+    proc_manifest = tmp_path / "dockuri.yaml"
+    proc_manifest.write_text(
+        "version: 'dockuri/proc-v2'\n"
+        "processes:\n"
+        "  - uri: 'proc://system/sprint/deduplicate/v2'\n"
+        "    aliases:\n"
+        "      - 'proc://system/sprint/deduplicate/v1'\n"
+        "    run: ['python3', '-m', 'willops']\n",
+        encoding="utf-8",
+    )
+    v2_report = validate_proc_v2_manifest(proc_manifest)
+    assert v2_report["status"] == "PASS"
+    assert v2_report["process_count"] == 1
+    assert v2_report["alias_count"] == 1
+
+    std_report = check_uri_standard_conformance(proc_manifest)
+    assert std_report["status"] == "PASS"
+    assert "DOCK-PRM-001" in std_report["rules_enforced"]
+

@@ -81,8 +81,19 @@ class DockuriRegistry:
             # Prune excluded directories in-place so os.walk skips them entirely
             dirnames[:] = [d for d in dirnames if d not in EXCLUDED_DIRS and not d.startswith(".")]
 
+            # 0. Native dockuri.yaml / dockuri.yml (dockuri/proc-v2)
+            if "dockuri.yaml" in filenames or "dockuri.yml" in filenames:
+                f_name = "dockuri.yaml" if "dockuri.yaml" in filenames else "dockuri.yml"
+                f_path = Path(dirpath) / f_name
+                try:
+                    import yaml  # type: ignore
+                    with open(f_path, "r", encoding="utf-8") as f:
+                        count += self.register_dockuri_yaml_manifest(yaml.safe_load(f), str(f_path))
+                except Exception:
+                    pass
+
             # 1. Native dockuri.json
-            if "dockuri.json" in filenames:
+            elif "dockuri.json" in filenames:
                 f_path = Path(dirpath) / "dockuri.json"
                 try:
                     with open(f_path, "r", encoding="utf-8") as f:
@@ -109,6 +120,47 @@ class DockuriRegistry:
                 except Exception:
                     pass
 
+        return count
+
+    def register_dockuri_yaml_manifest(self, data: dict[str, Any], file_path: str) -> int:
+        """Adapt a dockuri.yaml (dockuri/proc-v2) into canonical ProcedureRecords."""
+        if not isinstance(data, dict):
+            return 0
+        raw_procs = data.get("processes")
+        if raw_procs is not None:
+            proc_list = raw_procs if isinstance(raw_procs, list) else [
+                {"uri": u, **(defn if isinstance(defn, dict) else {})}
+                for u, defn in raw_procs.items()
+            ]
+        elif data.get("uri"):
+            proc_list = [data]
+        else:
+            proc_list = []
+        count = 0
+        for item in proc_list:
+            if not isinstance(item, dict):
+                continue
+            uri = str(item.get("uri") or "").strip()
+            if not uri or "://" not in uri:
+                continue
+            parts = uri.split("://")[-1].strip("/").split("/")
+            app = parts[0] if parts else "proc"
+            proc_sub = ".".join(parts[1:]) if len(parts) > 1 else "run"
+            proc_name = f"{app}.{proc_sub}"
+            desc = str(item.get("description") or f"Process {uri}")
+            effect = "mutating" if any(w in uri for w in ("modify", "relocate", "upsert", "delete", "heal")) else "pure"
+            record = ProcedureRecord(
+                app=app,
+                proc=proc_name,
+                uri=uri,
+                desc=desc,
+                effect=effect,
+                transport={"type": "cli", "run": item.get("run", [])},
+                schema={"input": {"type": "object"}, "output": {"type": "object"}},
+                manifest_path=file_path,
+            )
+            self.procedures[proc_name] = record
+            count += 1
         return count
 
     def register_manifest(self, manifest: dict[str, Any], file_path: str) -> int:
@@ -194,21 +246,50 @@ class DockuriRegistry:
         return count
 
     def search_for_nl(self, nl_query: str, limit: int = 5) -> list[ProcedureRecord]:
-        """Simple lexical and semantic retrieval matching NL intent against procedures."""
-        tokens = set(re.findall(r"\w+", nl_query.lower()))
+        """Simple lexical and semantic retrieval matching NL intent against procedures with stemming."""
+        def _stem(w: str) -> str:
+            w = w.lower().strip()
+            if w.startswith("z") and len(w) > 4 and w[1] in "bcdfgjklmnprstvwz":
+                w = w[1:]
+            for pref in ("wy", "od", "po", "roz", "za", "prze"):
+                if w.startswith(pref) and len(w) > len(pref) + 3:
+                    w = w[len(pref):]
+                    break
+            return (
+                w.replace("k", "c")
+                .replace("ń", "n")
+                .replace("ó", "o")
+                .replace("ą", "a")
+                .replace("ę", "e")
+                .replace("ś", "s")
+                .replace("ł", "l")
+                .replace("ż", "z")
+                .replace("ź", "z")
+            )
+
+        raw_tokens = [t for t in re.findall(r"\w+", nl_query.lower()) if len(t) > 1]
+        stems = {_stem(t) for t in raw_tokens}
         scored: list[tuple[float, ProcedureRecord]] = []
 
         for record in self.procedures.values():
             score = 0.0
-            search_corpus = f"{record.app} {record.proc} {record.desc}".lower()
+            search_corpus = f"{record.app} {record.proc} {record.desc} {record.uri}".lower()
+            corpus_tokens = [t for t in re.findall(r"\w+", search_corpus) if len(t) > 1]
+            corpus_stems = {_stem(t) for t in corpus_tokens}
 
-            for tok in tokens:
-                if tok in record.proc.lower():
+            for tok in raw_tokens:
+                if tok in record.proc.lower() or tok in record.uri.lower():
                     score += 3.0
-                if tok in record.desc.lower():
+                elif tok in record.desc.lower():
                     score += 1.5
-                if tok in record.app.lower():
+                elif tok in record.app.lower():
                     score += 1.0
+
+            for st in stems:
+                for c_st in corpus_stems:
+                    if st == c_st or (len(st) >= 4 and len(c_st) >= 4 and (st.startswith(c_st[:4]) or c_st.startswith(st[:4]))):
+                        score += 1.0
+                        break
 
             if score > 0:
                 scored.append((score, record))

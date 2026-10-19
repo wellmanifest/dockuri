@@ -12,8 +12,135 @@ import hashlib
 import json
 import time
 from typing import Any
-from .dockuri_client import DockuriClient
-from .dockuri_registry import DockuriRegistry, ProcedureRecord
+try:
+    from .dockuri_client import DockuriClient
+    from .dockuri_registry import DockuriRegistry, ProcedureRecord
+except ImportError:
+    from dockuri_client import DockuriClient  # type: ignore
+    from dockuri_registry import DockuriRegistry, ProcedureRecord  # type: ignore
+
+GENERIC_URI_PROMPTS: dict[str, dict[str, str]] = {
+    "system_uri_first": {
+        "pl": (
+            "Stosuj zasadę URI-First (wellmanifest/dockuri DOCK-URI-001 & DOCK-LFC-001): "
+            "zanim napiszesz nową funkcję pomocniczą lub skrypt w projekcie '{project_root}', "
+            "sprawdź dostępne procesy w katalogu dockuri/urirun (`uri --catalog`). "
+            "Wywołuj istniejące procesy przez `uri('<pełny_adres_uri>', payload)` lub strumieniowo "
+            "`uri_jsonl('<pełny_adres_uri>', lines)` / `uri '<pełny_adres_uri>'` + JSONL. "
+            "Gdy logika powtarza się między projektami, zarejestruj ją lub przenieś przez "
+            "`uri('proc://system/process/manage/v1', {{'action': 'generate|modify|relocate|snippet', ...}})`."
+        ),
+        "en": (
+            "Follow the URI-First policy (wellmanifest/dockuri DOCK-URI-001 & DOCK-LFC-001): "
+            "before writing a new helper function or script in '{project_root}', inspect available "
+            "URI processes via `uri --catalog`. Invoke reusable processes via `uri('<full_uri>', payload)` "
+            "or `uri_jsonl('<full_uri>', lines)` / `uri '<full_uri>'` + JSONL. Manage shared process lifecycle "
+            "via `uri('proc://system/process/manage/v1', {{'action': 'generate|modify|relocate|snippet', ...}})`."
+        ),
+    },
+    "discover_and_run": {
+        "pl": (
+            "Dla zadania: \"{task_description}\" w repozytorium '{project_root}': "
+            "1) dobierz odpowiedni proces URI z katalogu `dockuri` (`proc://...`) lub `urirun` (`task://...`), "
+            "2) wywołaj go przez `uri('<pełny_adres_uri>', payload)` z wymaganym ładunkiem JSON, "
+            "3) zweryfikuj pole `status` oraz zwróć wynik bez duplikowania logiki w lokalnym skrypcie."
+        ),
+        "en": (
+            "For task \"{task_description}\" in repository '{project_root}': "
+            "1) select the matching URI process from `dockuri` (`proc://...`) or `urirun` (`task://...`), "
+            "2) invoke it via `uri('<full_uri>', payload)`, and "
+            "3) verify `status` and return the result without duplicating logic locally."
+        ),
+    },
+    "extract_to_dockuri": {
+        "pl": (
+            "Przeanalizuj plik '{target_file}' pod kątem logiki powtarzalnej w wielu projektach. "
+            "Wyodrębnij ją jako proces URI '{target_uri}' za pomocą "
+            "`uri('proc://system/process/manage/v1', {{'action': 'generate', 'target_uri': '{target_uri}', ...}})`, "
+            "wygeneruj snippet wywołania dla języka '{language}' (`action='snippet'`) i zastąp lokalną implementację "
+            "w '{target_file}' wywołaniem `uri('{target_uri}', payload)`."
+        ),
+        "en": (
+            "Analyze '{target_file}' for logic duplicated across projects. "
+            "Extract it into URI process '{target_uri}' via "
+            "`uri('proc://system/process/manage/v1', {{'action': 'generate', 'target_uri': '{target_uri}', ...}})`, "
+            "generate the '{language}' call snippet (`action='snippet'`), and replace the local implementation "
+            "in '{target_file}' with `uri('{target_uri}', payload)`."
+        ),
+    },
+    "modify_and_relocate": {
+        "pl": (
+            "Zaktualizuj lub przenieś proces URI '{target_uri}' pod nowy kanoniczny adres '{new_uri}' "
+            "używając `uri('proc://system/process/manage/v1', {{'action': 'relocate', 'target_uri': '{target_uri}', 'new_uri': '{new_uri}'}})`. "
+            "Zachowaj stary adres w liście `aliases`, aby wszystkie dotychczasowe wywołania `uri('{target_uri}', ...)` "
+            "w innych projektach działały bez przerwania kompatybilności."
+        ),
+        "en": (
+            "Update or relocate URI process '{target_uri}' to the new canonical address '{new_uri}' "
+            "via `uri('proc://system/process/manage/v1', {{'action': 'relocate', 'target_uri': '{target_uri}', 'new_uri': '{new_uri}'}})`. "
+            "Preserve the previous address in `aliases` so existing callers across repositories remain backward-compatible."
+        ),
+    },
+    "batch_jsonl_stream": {
+        "pl": (
+            "Wykonaj operację '{target_uri}' wsadowo dla wielu celów w '{project_root}' w jednym przebiegu: "
+            "przekaż listę obiektów wejściowych jako strumień JSONL do `uri_jsonl('{target_uri}', lines)` "
+            "lub w terminalu `cat targets.jsonl | uri '{target_uri}'` i zagreguj wyniki."
+        ),
+        "en": (
+            "Execute '{target_uri}' in batch across multiple targets in '{project_root}' in a single pass: "
+            "stream the input records as JSONL to `uri_jsonl('{target_uri}', lines)` or "
+            "`cat targets.jsonl | uri '{target_uri}'` and aggregate the responses."
+        ),
+    },
+    "streamline_remediate": {
+        "pl": (
+            "Uruchom analizę `wellmanifest/streamline` dla projektu '{project_root}', odczytaj deskryptory "
+            "`uriDelegation` z planu refaktoryzacji, zredukuj złożoność cyklomatyczną i naruszenia warstw "
+            "w pliku '{target_file}', a następnie zweryfikuj poprawkę procesem "
+            "`uri('proc://system/self-improvement/diagnose/v1', {{'path': '{target_file}', 'threshold': 10}})`."
+        ),
+        "en": (
+            "Run `wellmanifest/streamline` on '{project_root}', inspect the `uriDelegation` descriptors in the plan, "
+            "remediate cyclomatic complexity and layer violations in '{target_file}', and verify the fix via "
+            "`uri('proc://system/self-improvement/diagnose/v1', {{'path': '{target_file}', 'threshold': 10}})`."
+        ),
+    },
+    "project_sentence_dispatch": {
+        "pl": (
+            "Dla dowolnego polecenia: \"{sentence}\" w projekcie '{project_root}', który może być uruchomiony przez dockuri: "
+            "1) dopasuj lub skieruj zdanie do procesu URI (`proc://{project}/...` lub `dockuri://{project}/exec`), "
+            "2) wywołaj go szybką metodą `uri(...)` lub `uri <adres> [jsonl]`, "
+            "3) odbierz wynik ze statusem i kwitem wykonania bez tworzenia nowych skryptów pomocniczych."
+        ),
+        "en": (
+            "For any instruction: \"{sentence}\" in project '{project_root}' runnable via dockuri: "
+            "1) route the sentence to a URI process (`proc://{project}/...` or `dockuri://{project}/exec`), "
+            "2) execute it using the fast `uri(...)` or `uri <address> [jsonl]` method, "
+            "3) retrieve the result with status and receipt without writing ad-hoc scripts."
+        ),
+    },
+}
+
+
+def build_generic_uri_prompt(template_id: str, lang: str = "pl", **kwargs: Any) -> str:
+    """Render a normative generic prompt (DOCK-PRM-001) for any project or target."""
+    if template_id not in GENERIC_URI_PROMPTS:
+        raise KeyError(f"Unknown generic prompt template '{template_id}'. Available: {sorted(GENERIC_URI_PROMPTS)}")
+    lang_map = GENERIC_URI_PROMPTS[template_id]
+    template = lang_map.get(lang) or lang_map["pl"]
+    defaults = {
+        "project_root": "<ścieżka_projektu>",
+        "target_file": "<ścieżka_pliku>",
+        "task_description": "<opis_zadania>",
+        "target_uri": "proc://<domena>/<moduł>/<akcja>/v1",
+        "new_uri": "proc://<domena>/<moduł>/<akcja>/v2",
+        "language": "python",
+        "sentence": "<zdanie_lub_polecenie>",
+        "project": "<projekt>",
+    }
+    defaults.update({k: str(v) for k, v in kwargs.items()})
+    return template.format(**defaults)
 
 
 def build_llm_context(registry: DockuriRegistry, candidates: list[ProcedureRecord] | None = None) -> str:
@@ -31,8 +158,8 @@ def build_llm_context(registry: DockuriRegistry, candidates: list[ProcedureRecor
             "output_schema": r.schema.get("output", {}),
         })
 
-    prompt = f"""You are the Dockuri Pipeline Compiler.
-Given a natural language request, construct a valid DAG execution pipeline conforming to standard 'dockuri/workflow-v1'.
+    prompt = f"""You are the Dockuri Pipeline Compiler (DOCK-FLOW-001, DOCK-URI-001, DOCK-LFC-001, DOCK-PRM-001).
+Given a natural language request, construct a valid DAG execution pipeline conforming to standard 'dockuri/workflow-v1' or invoke canonical URI processes via `uri('<full_uri>', payload)` / `uri_jsonl('<full_uri>', lines)`.
 
 ### AVAILABLE URI PROCEDURES:
 {json.dumps(procs_catalog, indent=2, ensure_ascii=False)}
@@ -53,6 +180,7 @@ Given a natural language request, construct a valid DAG execution pipeline confo
 2. If a step uses {{"$from": "stepA", "path": "..."}}, it MUST declare "depends_on": ["stepA"].
 3. Pipelines must be acyclic (DAG).
 4. Output must be raw JSON conforming to this schema without extra conversational markdown.
+5. Prefer `uri('<full_uri>', payload)` and `proc://system/process/manage/v1` (`generate`, `modify`, `relocate`, `snippet`) over duplicating helper logic across repositories.
 """
     return prompt
 
