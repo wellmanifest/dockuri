@@ -297,7 +297,6 @@ def _invoke_single(clean_uri: str, params: dict[str, Any], socket_path: str | No
                         run_cmd = proc_def.get("run") or ["echo", clean_uri]
                         if params.get("dry_run"):
                             return {"status": "ok", "uri": clean_uri, "dry_run": True, "command": run_cmd}
-                        import subprocess
                         proc = subprocess.run(run_cmd, capture_output=True, text=True, check=False)
                         return {
                             "status": "ok" if proc.returncode == 0 else "error",
