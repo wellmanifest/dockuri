@@ -127,7 +127,10 @@ class DockuriRegistry:
             else:
                 dirnames[:] = [
                     d for d in dirnames
-                    if d not in EXCLUDED_DIRS and not d.startswith(".") and not d.endswith("-archive")
+                    if d not in EXCLUDED_DIRS
+                    and not d.startswith(".")
+                    and not d.endswith("-archive")
+                    and not (cur / d).is_symlink()
                 ]
 
             fset = set(filenames)
