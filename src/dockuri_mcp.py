@@ -22,6 +22,10 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+_REPO_ROOT = str(Path(__file__).resolve().parent.parent)
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
 try:
     from .dockuri_check import (
         check_sentence_dispatch,
@@ -31,13 +35,13 @@ try:
     from .dockuri_client import render_uri_call_snippet, uri, uri_jsonl
     from .dockuri_registry import DockuriRegistry, get_cached_registry
 except ImportError:
-    from dockuri_check import (  # type: ignore
+    from src.dockuri_check import (  # type: ignore
         check_sentence_dispatch,
         check_uri_standard_conformance,
         inspect_project_dockuri_readiness,
     )
-    from dockuri_client import render_uri_call_snippet, uri, uri_jsonl  # type: ignore
-    from dockuri_registry import DockuriRegistry, get_cached_registry  # type: ignore
+    from src.dockuri_client import render_uri_call_snippet, uri, uri_jsonl  # type: ignore
+    from src.dockuri_registry import DockuriRegistry, get_cached_registry  # type: ignore
 
 
 MCP_TOOLS_SPEC: List[Dict[str, Any]] = [

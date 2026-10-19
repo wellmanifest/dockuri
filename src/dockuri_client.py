@@ -314,25 +314,25 @@ def _invoke_single(clean_uri: str, params: dict[str, Any], socket_path: str | No
         proc_name = f"{parts.netloc}.{'.'.join(proc_parts)}" if proc_parts else parts.netloc
         return DockuriClient(str(sock)).call(proc_name, params)
 
-    try:
-        import dockuri_uri as _runtime_uri  # type: ignore
-        res = _runtime_uri.uri(clean_uri, params)
-        return res if isinstance(res, dict) else {"status": "ok", "results": res}
-    except ImportError:
-        for cand in (
-            Path.home() / "github" / "dockuri" / "dockuri" / "python",
-            Path.home() / "github" / "paxlet-com" / "dockuri" / "python",
-        ):
-            if (cand / "dockuri_uri.py").is_file():
-                cand_str = str(cand)
-                if cand_str not in sys.path:
-                    sys.path.insert(0, cand_str)
-                try:
-                    import dockuri_uri as _runtime_uri  # type: ignore
-                    res = _runtime_uri.uri(clean_uri, params)
-                    return res if isinstance(res, dict) else {"status": "ok", "results": res}
-                except ImportError:
-                    pass
+    for cand in (
+        Path.home() / "github" / "dockuri" / "dockuri" / "python",
+        Path.home() / "github" / "paxlet-com" / "dockuri" / "python",
+    ):
+        if (cand / "dockuri_uri.py").is_file():
+            cand_str = str(cand)
+            if sys.path[:1] != [cand_str]:
+                if cand_str in sys.path:
+                    sys.path.remove(cand_str)
+                sys.path.insert(0, cand_str)
+            existing_reg = sys.modules.get("dockuri_registry")
+            if existing_reg is not None and not hasattr(existing_reg, "Registry"):
+                sys.modules.pop("dockuri_registry", None)
+            try:
+                import dockuri_uri as _runtime_uri  # type: ignore
+                res = _runtime_uri.uri(clean_uri, params)
+                return res if isinstance(res, dict) else {"status": "ok", "results": res}
+            except ImportError:
+                pass
 
     uri_bin = shutil.which("uri") or shutil.which("dockuri")
     if uri_bin:
