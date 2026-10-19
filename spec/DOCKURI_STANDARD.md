@@ -159,3 +159,26 @@ Końcowym standardem zapisu potoku wygenerowanego przez model LLM lub operatora 
 4. **Weryfikacja acykliczności DAG**: Przed wykonaniem orkiestrator sprawdza graf algorytmem Kahna. Wykrycie cyklu zatrzymuje wykonanie ze statusem błędu (*fail-closed*).
 5. **Kwit kryptograficzny**: Każdy krok generuje hash stanu pośredniego, a po zakończeniu emitowany jest jeden zbiorczy kwit `CompositeExecutionReceipt` (`wellmanifest.wellman/receipt/v1`).
 
+### `DOCK-URI-001: Universal Polyglot URI Invocation Contract (uri('') & uri <address> + JSONL)`
+Aby wyeliminować duplikację skryptów pomocniczych w skali wszystkich projektów, każdy skrypt lub moduł w dowolnym języku linkuje do zunifikowanego interfejsu wywołania procesów URI:
+
+1. **Interfejs biblioteczny `uri('<pełny_adres_uri>', [payload])`**:
+   * Przyjmuje pełny adres URI wraz z opcjonalnymi parametrami zapytania (`proc://app/module/action/v1?dry_run=true`) oraz ładunek słownikowy, JSON, wieloliniowy strumień **JSONL** lub referencję plikową `@plik.jsonl`.
+   * Dla pojedynczego rekordu zwraca słownik wyniku `dict[str, Any]`; dla wsadu JSONL (wielu linii lub listy obiektów) zwraca listę wyników `list[dict[str, Any]]`.
+   * Funkcja `uri_jsonl('<pełny_adres_uri>', lines)` przetwarza strumień linii JSONL w sposób leniwy/wsadowy.
+2. **Uniwersalna komenda CLI `uri <pełny_adres_uri> [jsonl]`**:
+   * Wywołanie z argumentem: `uri 'proc://system/sprint/deduplicate/v1' '{"project":"/path","dry_run":true}'`
+   * Wywołanie ze strumieniem JSONL na `stdin`:
+     ```bash
+     printf '%s\n' '{"project":"/repo/a"}' '{"project":"/repo/b"}' | uri 'proc://system/sprint/deduplicate/v1?dry_run=true'
+     ```
+   * Wywołanie z plikiem JSONL: `uri 'proc://system/sprint/deduplicate/v1' @targets.jsonl`
+3. **Poliglotyczne generowanie wiązań (`--snippet <lang>`)**:
+   * Komenda `uri --snippet <python|bash|js|rust|go|php> <pełny_adres_uri>` oraz funkcja `render_uri_call_snippet(...)` generują minimalny kod linkujący w docelowym języku, zastępujący lokalne duplikaty skryptów wywołaniem procesu URI w `dockuri`.
+
+### `DOCK-LFC-001: Declarative URI Process Lifecycle & Cross-Project Deduplication (proc://system/process/manage/v1)`
+Procesy URI są centralnie generowane, modyfikowane i przenoszone (relokowane) za pomocą metaprocesu `proc://system/process/manage/v1`:
+1. **`action=generate | modify | upsert`**: Rejestruje lub aktualizuje proces `dockuri/proc-v2` w manifeście `dockuri.yaml` wraz z wygenerowanymi snippetami poliglotycznymi (`python`, `bash`, `js`, `rust`) i kwitem `receipt_urn`.
+2. **`action=relocate | move | rename`**: Przenosi definicję procesu URI pomiędzy manifestami projektów lub zmienia jego kanoniczny adres URI z zachowaniem ciągłości audytowej.
+3. **`action=snippet`**: Zwraca gotowy kod wywołania `uri('<target_uri>', ...)` dla wybranego języka.
+
