@@ -102,9 +102,14 @@ def test_generic_prompts_and_uri_standard_conformance(tmp_path: Path):
     assert v2_report["process_count"] == 1
     assert v2_report["alias_count"] == 1
 
-    std_report = check_uri_standard_conformance(proc_manifest)
-    assert std_report["status"] == "PASS"
+    std_report = check_uri_standard_conformance(
+        proc_manifest,
+        project_path=tmp_path,
+        test_sentence="deduplicate sprint",
+    )
+    assert std_report["status"] == "INCONCLUSIVE"
     assert "DOCK-PRM-001" in std_report["rules_enforced"]
+    assert "DOCK-DISP-001" in std_report["rules_unverified"]
 
 
 

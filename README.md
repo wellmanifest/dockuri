@@ -61,7 +61,7 @@ Available tools (with `dockuri_*` and `dockuri.*` aliases):
 ### 1. Execute Any Sentence on Any Project Runnable via Dockuri (Fast Method)
 ```bash
 # 1. Enforce readiness & test sentence dispatch for any project:
-python3 src/dockuri_check.py --check-uri-standard --project /home/tom/github/dockuri/willops/willops --test-sentence "wyszukaj dockuri root w willops"
+python3 src/dockuri_check.py --check-uri-standard --project ../willops --test-sentence "wyszukaj dockuri root w willops"
 
 # 2. Call directly via universal CLI (streaming JSONL stdin/args):
 uri "proc://willops/run/instruction/v1" '{"instruction": "audyt zależności", "dry_run": true}'
@@ -74,7 +74,7 @@ result = uri("proc://system/sprint/deduplicate/v1", {"action": "audit", "dry_run
 ### 2. Validate a Project's `dockuri.json` or `dockuri.yaml`
 ```bash
 python3 src/dockuri_check.py --manifest path/to/dockuri.json
-python3 src/dockuri_check.py --check-uri-standard --proc-manifest /home/tom/github/dockuri/dockuri.yaml
+python3 src/dockuri_check.py --check-uri-standard --proc-manifest path/to/dockuri.yaml
 ```
 
 ### 3. Probe a Live Worker for Latency Compliance (< 2.0 ms)
