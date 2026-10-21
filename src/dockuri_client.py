@@ -254,6 +254,31 @@ def render_uri_call_snippet(
 _PROJECT_MANIFEST_CACHE: dict[Path, tuple[int, Any]] = {}
 
 
+def _dry_run_resolution(clean_uri: str, params: dict[str, Any], project: Path | None) -> dict[str, Any]:
+    """Resolve a dry-run call without executing it; an unregistered URI is an error, never a dispatch."""
+    try:
+        from .dockuri_registry import get_cached_registry
+    except ImportError:
+        from dockuri_registry import get_cached_registry  # type: ignore
+    scope = project if project is not None and project.is_dir() else Path.cwd()
+    if any(r.uri == clean_uri for r in get_cached_registry(scope).procedures.values()):
+        return {"status": "ok", "uri": clean_uri, "dry_run": True, "dispatched": False, "resolved": True, "params": params}
+    return {
+        "status": "error",
+        "uri": clean_uri,
+        "dry_run": True,
+        "dispatched": False,
+        "error": {"code": "UNKNOWN_URI", "message": f"{clean_uri} is not registered in {scope}"},
+    }
+
+
+def normalize_result(result: Any) -> Any:
+    """Give `{"ok": false}` envelopes an explicit `status: error` so callers cannot mistake them for success."""
+    if isinstance(result, dict) and "status" not in result and result.get("ok") is False:
+        return {"status": "error", **result}
+    return result
+
+
 def _invoke_single(clean_uri: str, params: dict[str, Any], socket_path: str | None = None) -> dict[str, Any]:
     if clean_uri in _CUSTOM_URI_HANDLERS:
         return _CUSTOM_URI_HANDLERS[clean_uri](params)
@@ -309,16 +334,24 @@ def _invoke_single(clean_uri: str, params: dict[str, Any], socket_path: str | No
                     if proc_def is not None:
                         run_cmd = proc_def.get("run") or ["echo", clean_uri]
                         if params.get("dry_run"):
-                            return {"status": "ok", "uri": clean_uri, "dry_run": True, "command": run_cmd}
-                        proc = subprocess.run(run_cmd, capture_output=True, text=True, check=False)
+                            return {"status": "ok", "uri": clean_uri, "dry_run": True, "dispatched": False, "command": run_cmd}
+                        payload_json = json.dumps(params, ensure_ascii=False)
+                        proc = subprocess.run(
+                            [run_cmd] if isinstance(run_cmd, str) else [str(a) for a in run_cmd],
+                            input=payload_json, capture_output=True, text=True, check=False,
+                            cwd=proc_def.get("cwd") or str(resolved_mf.parent),
+                            env={**os.environ, "URI_PAYLOAD_JSON": payload_json},
+                            timeout=float(params.get("timeout_seconds", 60.0)),
+                        )
                         return {
                             "status": "ok" if proc.returncode == 0 else "error",
                             "uri": clean_uri,
                             "returncode": proc.returncode,
                             "stdout": proc.stdout.strip(),
+                            "stderr": proc.stderr.strip(),
                         }
-                except Exception:
-                    pass
+                except Exception as exc:
+                    return {"status": "error", "uri": clean_uri, "error": {"code": "MANIFEST_PROCESS_FAILED", "message": f"{mf}: {exc}"}}
 
     if params.get("dry_run") and (
         clean_uri.endswith("/run/instruction/v1")
@@ -327,7 +360,7 @@ def _invoke_single(clean_uri: str, params: dict[str, Any], socket_path: str | No
             and not clean_uri.startswith(("proc://system/", "proc://willrust/", "proc://ast-scan/", "proc://uri-router/", "proc://willgit/"))
         )
     ):
-        return {"status": "ok", "uri": clean_uri, "dry_run": True, "dispatched": True, "echo": params}
+        return _dry_run_resolution(clean_uri, params, proj_path_resolved)
 
     sock = socket_path or params.pop("_socket", None) or os.environ.get("DOCKURI_SOCKET")
     if sock and os.path.exists(str(sock)):
@@ -382,7 +415,7 @@ def uri(address: str, payload: Any = None, *, socket_path: str | None = None, **
     """Standard `uri('<full-uri>', [payload])` function for cross-project URI execution (DOCK-URI-001)."""
     clean_uri, query_params = _split_uri_and_query(address)
     records, is_batch = parse_jsonl_payload(payload)
-    results = [_invoke_single(clean_uri, {**query_params, **rec, **kwargs}, socket_path=socket_path) for rec in records]
+    results = [normalize_result(_invoke_single(clean_uri, {**query_params, **rec, **kwargs}, socket_path=socket_path)) for rec in records]
     return results if is_batch else results[0]
 
 
@@ -407,7 +440,7 @@ def uri_jsonl(
             record = dict(item)
         else:
             record = {"value": item}
-        outputs.append(_invoke_single(clean_uri, {**query_params, **record, **kwargs}, socket_path=socket_path))
+        outputs.append(normalize_result(_invoke_single(clean_uri, {**query_params, **record, **kwargs}, socket_path=socket_path)))
     return outputs
 
 

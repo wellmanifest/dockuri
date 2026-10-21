@@ -213,7 +213,8 @@ Standard **Dockuri** definiuje procedurę mapowania i wykonywania dowolnego zdan
    * **Etap 1: Dopasowanie semantyczne / Routing**:
      Dowolne zdanie języka naturalnego $S$ (np. *„Zdeduplikuj zadania w sprincie w semcod/tagi”*, *„Sprawdź spójność bazy danych”*, *„Uruchom testy jednostkowe w willuri”*) jest analizowane przez router semantyczny (`willuri` / `DockuriRegistry.search_for_nl`).
      * Jeżeli w projekcie istnieje procedura o pasującym podpisie semantycznym, zdanie jest kierowane do dedykowanego procesu (np. `proc://system/sprint/deduplicate/v1` lub `willman://operation/dockuri/v1`).
-     * Jeżeli projekt nie posiada specyficznej procedury, zdanie jest kierowane do generycznego endpointu wykonawczego projektu: `proc://<project>/run/instruction/v1` lub `dockuri://<project>/exec?instruction=...`.
+     * Jeżeli projekt nie posiada specyficznej procedury, zdanie wolno skierować do generycznego endpointu wykonawczego projektu (`proc://<project>/run/instruction/v1`) **wyłącznie wtedy, gdy projekt go rejestruje**. Adresu tego nie wolno konstruować z nazwy katalogu. Bez dopasowania i bez zarejestrowanego endpointu wynikiem jest `status=error` z kodem `NO_MATCHING_PROCEDURE`, a nic nie zostaje wykonane.
+     * Wynik routingu jest heurystyką leksykalną, a nie oceną pewności. Implementacja nie może przedstawiać dopasowania jako potwierdzenia, że procedura realizuje intencję zdania.
    * **Etap 2: Szybkie wykonanie (Fast Invocation)**:
      Zamiast żmudnego pisania wieloliniowych skryptów pomocniczych przez LLM, model emituje jednolinijkowe wywołanie:
      ```python
@@ -288,12 +289,14 @@ Standard Dockuri definiuje interoperacyjny most serwerowy **Model Context Protoc
 1. **`dockuri_execute_sentence`** (alias: `dockuri.uri` z polem `sentence`):
    * **Opis**: Wykonuje dowolne zdanie/polecenie w języku naturalnym na bazie dowolnego projektu uruchamialnego przez Dockuri (`DOCK-DISP-001`).
    * **Parametry**: `sentence` (string, wymagany), `project` (string, opcjonalny), `dry_run` (bool), `payload` (object).
-   * **Wynik**: Status wykonania, dopasowany kanoniczny proces URI (`matched_uri`), wyjście procesu, czas trwania w ms.
+   * **Wynik**: Status wykonania, dopasowany kanoniczny proces URI (`matched_uri`), wyjście procesu, czas trwania w ms. `status` odzwierciedla wynik procesu: `error`, gdy proces zwrócił `status=error` lub `ok=false`, oraz `error`/`NO_MATCHING_PROCEDURE`, gdy nic nie dopasowano.
 
 2. **`dockuri_call_uri`** (alias: `dockuri.uri`):
    * **Opis**: Wywołuje kanoniczny proces URI (`proc://...`, `dockuri://...`, `willman://...`, `pdf://...`, `git://...`) z parametrami lub wsadem wieloliniowym JSONL (`DOCK-URI-001`).
    * **Parametry**: `uri` (string, wymagany), `payload` / `params` (object, opcjonalny), `raw_jsonl` / `jsonl_lines` (string/array, opcjonalny), `project` (string, opcjonalny), `dry_run` (bool, opcjonalny), `socket_path` (string, opcjonalny).
    * **Wynik**: Wynik procedury UDS / cdylib / in-process, metryki czasu (`_mcp_duration_ms` / `duration_ms`), kwit wykonania URN.
+   * **Prawdziwość wyniku**: Każdy wynik ma jawne pole `status`; koperta `{"ok": false}` bez `status` jest normalizowana do `status=error`, a CLI `uri` kończy się wtedy kodem różnym od zera. `dry_run` niczego nie wykonuje i zwraca `dispatched=false`; dla URI niezarejestrowanego w rejestrze projektu zwraca `status=error` z kodem `UNKNOWN_URI`, a nie sukces.
+   * **Zakres mutacji**: Wywołania mutujące (`proc://system/sprint/deduplicate/v1`, `proc://system/worktree/promote/v1`) wymagają jawnego `project`, `projects` lub `workspace_root`. Serwer nie podstawia własnego katalogu roboczego, chyba że wywołanie jest `dry_run` albo `action=audit`. Akcja `audit` nigdy nie mutuje, a nieznana akcja daje `UNKNOWN_ACTION`.
 
 3. **`dockuri_search_procedures`** (alias: `dockuri.search`):
    * **Opis**: Przeszukuje katalog procedur i procesów URI (`dockuri.yaml`, `dockuri.json`, `uriprocess.json`, `connector.manifest.json`, `apx.yaml`) na podstawie zapytania tekstowego lub semantycznego.
@@ -303,12 +306,12 @@ Standard Dockuri definiuje interoperacyjny most serwerowy **Model Context Protoc
 4. **`dockuri_list_projects`**:
    * **Opis**: Odkrywa wszystkie projekty uruchamialne przez Dockuri w podanym katalogu roboczym (przeszukuje `dockuri.yaml`, `dockuri.json`, `uriprocess.json`, `.dockuri/`).
    * **Parametry**: `root_dir` / `workspace_root` (string, opcjonalny), `limit` (integer, domyślnie 20).
-   * **Wynik**: Lista projektów, typów manifestów i liczby procedur.
+   * **Wynik**: Lista projektów, typów manifestów i liczby procedur (`project_procedures_count`, `builtin_procedures_count`). Wbudowane usługi systemowe rejestrowane dla każdego obszaru `.planfile` nie czynią projektu uruchamialnym: katalog bez własnego deskryptora i procedur ma typ `builtin-only` i status `WARN`, więc nie jest zwracany.
 
 5. **`dockuri_manage_process`** (alias: `dockuri.process_manage`):
    * **Opis**: Deklaratywne zarządzanie cyklem życia procesu URI (`DOCK-LFC-001`): generowanie, modyfikacja, relokacja oraz pobieranie poliglotycznych snippetów wywołania (`python`, `bash`, `js`, `ts`, `rust`, `go`, `php`).
    * **Parametry**: `action` (`generate` | `modify` | `relocate` | `extract` | `catalog` | `snippet` | `prompt_registry` | `llm_context`), `target_uri` / `uri` (string), `new_uri` (string), `run` / `command` (array[string]), `project` (string), `language` / `lang` (string).
-   * **Wynik**: Zaktualizowany manifest, kod snippetu linkującego lub kwit relokacji.
+   * **Wynik**: Zaktualizowany manifest, kod snippetu linkującego lub kwit relokacji. Akcje `generate`, `modify`, `relocate` i `extract` wymagają jawnego `target_uri` (inaczej `TARGET_URI_REQUIRED`); domyślny URI dotyczy wyłącznie akcji tylko do odczytu.
 
 6. **`dockuri_check_conformance`**:
    * **Opis**: Weryfikuje zgodność projektu z normami Dockuri (`DOCK-MAN-001`, `DOCK-URI-001`, `DOCK-LFC-001`, `DOCK-PRM-001`, `DOCK-DISP-001`, `DOCK-MCP-001`).
