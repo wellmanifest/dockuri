@@ -14,7 +14,7 @@ import socket
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 SCHEMA_FILE = Path(__file__).parent.parent / "schemas" / "dockuri-manifest.schema.json"
 
@@ -215,16 +215,20 @@ def check_sentence_dispatch(
     project_path: Path,
     sentence: str,
     max_latency_ms: float = 15.0,
+    dispatch_probe: Callable[[str, dict[str, Any]], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Verify that an arbitrary NL sentence can be dispatched to a project runnable via dockuri (DOCK-DISP-001)."""
+    """Resolve an NL sentence and optionally verify it with an explicitly supplied safe probe.
+
+    A registry match proves routing only. Running a project procedure during a
+    conformance check can have real effects, so execution is opt-in and must
+    return a receipt bound to the exact URI.
+    """
     t0 = time.perf_counter()
 
     try:
         from .dockuri_registry import get_cached_registry
-        from .dockuri_client import register_uri_process, uri
     except ImportError:
         from dockuri_registry import get_cached_registry  # type: ignore
-        from dockuri_client import register_uri_process, uri  # type: ignore
 
     target = project_path.resolve()
     reg = get_cached_registry(target)
@@ -234,31 +238,68 @@ def check_sentence_dispatch(
         target_uri = matched[0].uri
         matched_proc = matched[0].proc
     else:
-        # Fallback to generic project execution endpoint
         project_name = target.name
         target_uri = f"proc://{project_name}/run/instruction/v1"
-        matched_proc = f"{project_name}.run"
+        fallback = reg.procedures.get(f"{project_name}.run")
+        if fallback is None or fallback.uri != target_uri:
+            return {
+                "status": "FAIL",
+                "sentence": sentence,
+                "matched_uri": None,
+                "matched_proc": None,
+                "route_lookup_ms": round((time.perf_counter() - t0) * 1000.0, 3),
+                "dispatch_attempted": False,
+                "reason": "no matching procedure or registered generic instruction endpoint",
+            }
+        matched_proc = fallback.proc
 
-    test_payload = {"instruction": sentence, "project": str(target), "dry_run": True}
-    register_uri_process(target_uri, lambda p: {"status": "ok", "dispatched": True, "target": target_uri, "echo": p})
+    route_lookup_ms = round((time.perf_counter() - t0) * 1000.0, 3)
+    if route_lookup_ms > max_latency_ms:
+        raise AssertionError(f"Route lookup latency violation: {route_lookup_ms} ms exceeds {max_latency_ms} ms budget")
 
-    res = uri(target_uri, test_payload)
-    t1 = time.perf_counter()
-    duration_ms = round((t1 - t0) * 1000.0, 3)
+    if dispatch_probe is None:
+        return {
+            "status": "INCONCLUSIVE",
+            "sentence": sentence,
+            "matched_uri": target_uri,
+            "matched_proc": matched_proc,
+            "route_lookup_ms": route_lookup_ms,
+            "budget_ms": max_latency_ms,
+            "dispatch_attempted": False,
+            "reason": "route matched; no explicitly configured safe execution probe",
+        }
 
-    if not isinstance(res, dict) or res.get("status") != "ok":
-        raise RuntimeError(f"Sentence dispatch failed for '{sentence}': {res}")
-
-    if duration_ms > max_latency_ms:
-        raise AssertionError(f"Dispatch latency violation: {duration_ms} ms exceeds {max_latency_ms} ms budget")
+    probe_payload = {"instruction": sentence, "project": str(target), "dry_run": False}
+    res = dispatch_probe(target_uri, probe_payload)
+    receipt = res.get("execution_receipt") if isinstance(res, dict) else None
+    if (
+        not isinstance(res, dict)
+        or res.get("status") != "ok"
+        or not isinstance(receipt, dict)
+        or receipt.get("status") != "completed"
+        or receipt.get("uri") != target_uri
+        or receipt.get("executed") is not True
+    ):
+        return {
+            "status": "FAIL",
+            "sentence": sentence,
+            "matched_uri": target_uri,
+            "matched_proc": matched_proc,
+            "route_lookup_ms": route_lookup_ms,
+            "budget_ms": max_latency_ms,
+            "dispatch_attempted": True,
+            "reason": "execution probe returned no successful receipt bound to the matched URI",
+            "result": res,
+        }
 
     return {
         "status": "PASS",
         "sentence": sentence,
         "matched_uri": target_uri,
         "matched_proc": matched_proc,
-        "duration_ms": duration_ms,
+        "route_lookup_ms": route_lookup_ms,
         "budget_ms": max_latency_ms,
+        "dispatch_attempted": True,
         "result": res,
     }
 
@@ -267,6 +308,7 @@ def check_uri_standard_conformance(
     proc_manifest_path: Path | None = None,
     project_path: Path | None = None,
     test_sentence: str | None = None,
+    dispatch_probe: Callable[[str, dict[str, Any]], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Enforce DOCK-URI-001, DOCK-LFC-001, DOCK-PRM-001, DOCK-DISP-001, and DOCK-MCP-001 across wellmanifest/dockuri."""
     try:
@@ -319,7 +361,7 @@ def check_uri_standard_conformance(
     proj_report = inspect_project_dockuri_readiness(target_proj)
 
     sample_sentence = test_sentence or "Przeprowadź audyt stanu projektu i wykonaj testy"
-    dispatch_report = check_sentence_dispatch(target_proj, sample_sentence)
+    dispatch_report = check_sentence_dispatch(target_proj, sample_sentence, dispatch_probe=dispatch_probe)
 
     # 5. DOCK-MCP-001: Verify MCP Server Tools & Sub-Millisecond Handshake
     t_mcp0 = time.perf_counter()
@@ -333,9 +375,16 @@ def check_uri_standard_conformance(
     if proc_manifest_path is not None:
         proc_report = validate_proc_v2_manifest(proc_manifest_path)
 
+    rules_verified = ["DOCK-URI-001", "DOCK-LFC-001", "DOCK-PRM-001", "DOCK-MCP-001"]
+    if dispatch_report["status"] == "PASS":
+        rules_verified.append("DOCK-DISP-001")
+    overall_status = "FAIL" if dispatch_report["status"] == "FAIL" else (
+        "PASS" if dispatch_report["status"] == "PASS" else "INCONCLUSIVE"
+    )
     return {
-        "status": "PASS",
-        "rules_enforced": ["DOCK-URI-001", "DOCK-LFC-001", "DOCK-PRM-001", "DOCK-DISP-001", "DOCK-MCP-001"],
+        "status": overall_status,
+        "rules_enforced": rules_verified,
+        "rules_unverified": [] if dispatch_report["status"] == "PASS" else ["DOCK-DISP-001"],
         "generic_prompts_verified": len(REQUIRED_PROMPT_IDS),
         "mcp_tools_verified": len(MCP_TOOLS_SPEC),
         "mcp_handshake_ms": mcp_ms,
@@ -369,22 +418,22 @@ def main() -> int:
 
             if args.json:
                 print(json.dumps(std_res, indent=2, ensure_ascii=False))
-                return 0
+                return 0 if std_res["status"] == "PASS" else 2
 
-            print(
-                f"✓ URI Standard PASS ({', '.join(std_res['rules_enforced'])}): "
-                f"{std_res['generic_prompts_verified']} generic prompts verified"
-            )
+            marker = "✓" if std_res["status"] == "PASS" else "!"
+            print(f"{marker} URI Standard {std_res['status']} ({', '.join(std_res['rules_enforced'])}): "
+                  f"{std_res['generic_prompts_verified']} generic prompts verified")
             pr = std_res["project_readiness"]
             print(
                 f"✓ Project Dockuri Readiness: '{pr['project']}' "
                 f"({pr['descriptor_type']}, {pr['runnable_procedures_count']} procedures)"
             )
             sd = std_res["sentence_dispatch"]
-            print(
-                f"✓ Sentence Dispatch PASS: \"{sd['sentence']}\" -> {sd['matched_uri']} "
-                f"({sd['duration_ms']} ms, budget <= {sd['budget_ms']} ms)"
-            )
+            if sd["status"] == "PASS":
+                print(f"✓ Sentence Dispatch PASS: \"{sd['sentence']}\" -> {sd['matched_uri']} "
+                      f"(route lookup {sd['route_lookup_ms']} ms, budget <= {sd['budget_ms']} ms)")
+            else:
+                print(f"! Sentence Dispatch {sd['status']}: {sd.get('reason', 'no result')}")
             if std_res["proc_manifest"]:
                 pm = std_res["proc_manifest"]
                 print(
@@ -392,7 +441,7 @@ def main() -> int:
                     f"{pm['alias_count']} backward-compatible aliases"
                 )
             if not args.manifest:
-                return 0
+                return 0 if std_res["status"] == "PASS" else 2
 
         m_path = Path(args.manifest or "dockuri.json")
         manifest = validate_manifest(m_path)
@@ -407,6 +456,8 @@ def main() -> int:
             res = probe_uds_ping(sock)
             print(f"✓ UDS __ping__ PASS: {res['duration_ms']} ms round-trip (budget <= 2.0 ms)")
             print(f"  Runtime info: {res['response'].get('result', {})}")
+        if args.check_uri_standard or args.proc_manifest or args.test_sentence:
+            return 0 if std_res["status"] == "PASS" else 2
         return 0
     except Exception as e:
         print(f"✗ Check failed: {e}", file=sys.stderr)

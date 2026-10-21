@@ -241,8 +241,10 @@ Standard **Dockuri** definiuje procedurę mapowania i wykonywania dowolnego zdan
    ```
    Kryteria akceptacji:
    * Wykrycie poprawnego deskryptora uruchomieniowego projektu.
-   * Pomyślny test dispatchu zdania do kanonicznego procesu URI z kodem `status=ok`.
-   * Czas dyspozycji i weryfikacji mieszczący się w budżecie $\le 15.0$ ms.
+   * Dopasowanie zdania do kanonicznego URI potwierdza wyłącznie routing, nie wykonanie. Sama odpowiedź `status=ok`, odpowiedź `dry_run` ani czas wywołania atrapy nie są dowodem dispatchu.
+   * Test zgodności nie uruchamia procedury projektu domyślnie. Wykonanie wolno sprawdzić tylko przez jawnie skonfigurowaną, ograniczoną sondę bez skutków ubocznych; jej kwit musi zawierać `status=completed`, `executed=true` i dokładnie dopasowany `uri`.
+   * Bez takiej sondy raport zwraca `INCONCLUSIVE`, wskazuje dopasowany URI i jawnie oznacza `dispatch_attempted=false`; brak pasującej procedury i zarejestrowanego endpointu ogólnego daje `FAIL`. Żaden z tych stanów nie może być przedstawiony jako `PASS`.
+   * Budżet $\le 15.0$ ms dotyczy wyłącznie pomiaru routingu. Czas wykonania sondy raportuje się osobno i nie używa go jako dowodu szybkości wysyłki.
 
 ### `DOCK-ACC-001: Fast URI Execution Acceleration (Floor -> Standard -> Opportunistic)`
 Zastosowanie procesów URI jako warstwy wykonawczej dla modeli LLM dramatycznie przyspiesza pracę agentów sztucznej inteligencji:
