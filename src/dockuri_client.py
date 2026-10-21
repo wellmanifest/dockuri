@@ -254,6 +254,35 @@ def render_uri_call_snippet(
 _PROJECT_MANIFEST_CACHE: dict[Path, tuple[int, Any]] = {}
 
 
+def _resolve_uds_socket(app: str = "daemon", explicit: str | None = None) -> str | None:
+    """Resolve Unix Domain Socket path per DOCK-UDS-001 hierarchy."""
+    if explicit and os.path.exists(str(explicit)):
+        return str(explicit)
+    env_sock = os.environ.get("DOCKURI_SOCKET")
+    if env_sock and os.path.exists(env_sock):
+        return env_sock
+    run_dir = os.environ.get("DOCKURI_RUN_DIR")
+    if run_dir:
+        cand = Path(run_dir) / f"{app}.sock"
+        if cand.exists():
+            return str(cand)
+    system_cand = Path(f"/run/dockuri/{app}.sock")
+    if system_cand.exists():
+        return str(system_cand)
+    user_cand = Path.home() / ".dockuri" / "run" / f"{app}.sock"
+    if user_cand.exists():
+        return str(user_cand)
+    for tmp_cand in (Path(f"/tmp/dockuri_{app}.sock"), Path("/tmp/dockuri_daemon.sock"), Path("/tmp/dockuri.sock")):
+        if tmp_cand.exists():
+            return str(tmp_cand)
+    return None
+
+
+def is_failure(result: Any) -> bool:
+    """True for any result reporting failure, including `{"ok": false}` envelopes without `status`."""
+    return not isinstance(result, dict) or result.get("status") == "error" or result.get("ok") is False
+
+
 def _invoke_single(clean_uri: str, params: dict[str, Any], socket_path: str | None = None) -> dict[str, Any]:
     if clean_uri in _CUSTOM_URI_HANDLERS:
         return _CUSTOM_URI_HANDLERS[clean_uri](params)
@@ -329,12 +358,16 @@ def _invoke_single(clean_uri: str, params: dict[str, Any], socket_path: str | No
     ):
         return {"status": "ok", "uri": clean_uri, "dry_run": True, "dispatched": True, "echo": params}
 
-    sock = socket_path or params.pop("_socket", None) or os.environ.get("DOCKURI_SOCKET")
-    if sock and os.path.exists(str(sock)):
-        parts = urlsplit(clean_uri)
+    parts = urlsplit(clean_uri)
+    app = parts.netloc or "daemon"
+    sock = _resolve_uds_socket(app, socket_path or params.pop("_socket", None))
+    if sock:
         proc_parts = [p for p in parts.path.strip("/").split("/") if p and not re.fullmatch(r"v\d+", p)]
         proc_name = f"{parts.netloc}.{'.'.join(proc_parts)}" if proc_parts else parts.netloc
-        return DockuriClient(str(sock)).call(proc_name, params)
+        res = DockuriClient(str(sock)).call(proc_name, params)
+        if isinstance(res, dict) and "status" not in res:
+            res = {"status": "error" if res.get("ok") is False else "ok", **res}
+        return res
 
     for cand in (
         Path.home() / "github" / "dockuri" / "dockuri" / "python",
@@ -438,7 +471,7 @@ def uri_main(argv: list[str] | None = None) -> int:
     if isinstance(result, list):
         for item in result:
             print(json.dumps(item, ensure_ascii=False))
-        return 0 if all(r.get("status") != "error" for r in result if isinstance(r, dict)) else 1
+        return 1 if any(is_failure(r) for r in result) else 0
     print(json.dumps(result, ensure_ascii=False))
-    return 0 if (isinstance(result, dict) and result.get("status") != "error") else 1
+    return 1 if is_failure(result) else 0
 

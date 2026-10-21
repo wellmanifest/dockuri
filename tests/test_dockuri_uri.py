@@ -106,3 +106,33 @@ def test_generic_prompts_and_uri_standard_conformance(tmp_path: Path):
     assert std_report["status"] == "PASS"
     assert "DOCK-PRM-001" in std_report["rules_enforced"]
 
+
+
+def test_is_failure_truthful_envelope():
+    from src.dockuri_client import is_failure
+    assert is_failure({"ok": False}) is True
+    assert is_failure({"status": "error"}) is True
+    assert is_failure({"ok": True, "status": "ok"}) is False
+    assert is_failure({"status": "ok"}) is False
+
+
+def test_resolve_uds_socket_hierarchy(tmp_path: Path, monkeypatch):
+    from src.dockuri_client import _resolve_uds_socket
+    dummy_sock = tmp_path / "custom.sock"
+    dummy_sock.touch()
+
+    # 1. Explicit
+    assert _resolve_uds_socket("custom", str(dummy_sock)) == str(dummy_sock)
+
+    # 2. DOCKURI_SOCKET
+    monkeypatch.setenv("DOCKURI_SOCKET", str(dummy_sock))
+    assert _resolve_uds_socket("custom") == str(dummy_sock)
+
+    # 3. DOCKURI_RUN_DIR
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    app_sock = run_dir / "my_app.sock"
+    app_sock.touch()
+    monkeypatch.delenv("DOCKURI_SOCKET")
+    monkeypatch.setenv("DOCKURI_RUN_DIR", str(run_dir))
+    assert _resolve_uds_socket("my_app") == str(app_sock)
