@@ -242,9 +242,18 @@ def handle_execute_sentence(args: Dict[str, Any]) -> Dict[str, Any]:
         target_uri = matched[0].uri
         matched_proc = matched[0].proc
     else:
-        project_name = project_path.name
-        target_uri = f"proc://{project_name}/run/instruction/v1"
-        matched_proc = f"{project_name}.run"
+        fallback = reg.procedures.get(f"{project_path.name}.run")
+        if fallback is None:
+            return {
+                "status": "error",
+                "sentence": sentence,
+                "matched_uri": None,
+                "matched_proc": None,
+                "duration_ms": round((time.perf_counter() - t0) * 1000.0, 3),
+                "readiness": readiness,
+                "error": {"code": "NO_MATCHING_PROCEDURE", "message": "no procedure matches the sentence and the project registers no generic instruction endpoint"},
+            }
+        target_uri, matched_proc = fallback.uri, fallback.proc
 
     dispatch_payload = {
         "instruction": sentence,
@@ -257,8 +266,9 @@ def handle_execute_sentence(args: Dict[str, Any]) -> Dict[str, Any]:
     t1 = time.perf_counter()
     duration_ms = round((t1 - t0) * 1000.0, 3)
 
+    failed = not isinstance(result, dict) or result.get("status") == "error" or result.get("ok") is False
     return {
-        "status": "ok",
+        "status": "error" if failed else "ok",
         "sentence": sentence,
         "matched_uri": target_uri,
         "matched_proc": matched_proc,
@@ -268,6 +278,10 @@ def handle_execute_sentence(args: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+_PROJECT_SCOPED_MUTATING_URIS = ("proc://system/sprint/deduplicate/v1", "proc://system/worktree/promote/v1")
+_TARGETED_ACTIONS = ("generate", "modify", "relocate", "extract")
+
+
 def handle_call_uri(args: Dict[str, Any]) -> Any:
     if not args.get("uri") and args.get("sentence"):
         return handle_execute_sentence(args)
@@ -275,13 +289,15 @@ def handle_call_uri(args: Dict[str, Any]) -> Any:
     payload = dict(args.get("payload") or args.get("params") or args.get("args") or {})
     if args.get("project") and "project" not in payload:
         payload["project"] = args["project"]
-    elif (
-        target_uri in ("proc://system/sprint/deduplicate/v1", "proc://system/worktree/promote/v1")
-        and not any(k in payload for k in ("project", "projects", "workspace_root"))
-    ):
-        payload["project"] = os.getcwd()
     if args.get("dry_run") is not None and "dry_run" not in payload:
         payload["dry_run"] = bool(args["dry_run"])
+    if (
+        target_uri in _PROJECT_SCOPED_MUTATING_URIS
+        and not any(k in payload for k in ("project", "projects", "workspace_root"))
+    ):
+        if not (payload.get("dry_run") or str(payload.get("action") or "").lower() == "audit"):
+            return {"status": "error", "uri": target_uri, "error": {"code": "PROJECT_REQUIRED", "message": "mutating call needs an explicit project, projects or workspace_root"}}
+        payload["project"] = os.getcwd()
     raw_jsonl = args.get("raw_jsonl") or args.get("jsonl_lines")
     t0 = time.perf_counter()
     if raw_jsonl is not None:
@@ -328,7 +344,7 @@ def handle_list_projects(args: Dict[str, Any]) -> Dict[str, Any]:
             if entry.is_dir() and not entry.name.startswith(".") and not entry.name.endswith("-archive"):
                 try:
                     rd = inspect_project_dockuri_readiness(entry)
-                    if rd["status"] == "PASS" or rd["runnable_procedures_count"] > 0:
+                    if rd["status"] == "PASS":
                         projects.append(rd)
                         if len(projects) >= limit:
                             break
@@ -347,6 +363,8 @@ def handle_list_projects(args: Dict[str, Any]) -> Dict[str, Any]:
 def handle_manage_process(args: Dict[str, Any]) -> Dict[str, Any]:
     raw_action = str(args.get("action") or "catalog").strip().lower()
     action = {"list": "catalog", "mutate": "modify", "move": "relocate"}.get(raw_action, raw_action)
+    if action in _TARGETED_ACTIONS and not (args.get("target_uri") or args.get("uri")):
+        return {"status": "error", "action": action, "error": {"code": "TARGET_URI_REQUIRED", "message": f"action '{action}' needs an explicit target_uri"}}
     target_uri = str(args.get("target_uri") or args.get("uri") or "proc://system/sprint/deduplicate/v1")
     language = str(args.get("language") or args.get("snippet_lang") or args.get("lang") or "python")
 

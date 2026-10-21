@@ -200,13 +200,18 @@ def inspect_project_dockuri_readiness(project_path: Path) -> dict[str, Any]:
 
     reg = get_cached_registry(target)
     procs = list(reg.procedures.values())
+    # Built-in system services are registered for every .planfile workspace; they do not make a project runnable.
+    is_runtime_repo = (target / "python" / "dockuri_uri.py").is_file()
+    project_procs = procs if is_runtime_repo else [p for p in procs if p.transport.get("module") != "dockuri_uri"]
 
     return {
-        "status": "PASS" if (manifest_file or procs) else "WARN",
+        "status": "PASS" if (manifest_file or project_procs) else "WARN",
         "project": str(target),
-        "descriptor_type": matched_type or ("registry-discovered" if procs else "none"),
+        "descriptor_type": matched_type or ("registry-discovered" if project_procs else ("builtin-only" if procs else "none")),
         "manifest_file": str(manifest_file) if manifest_file else None,
         "runnable_procedures_count": len(procs),
+        "project_procedures_count": len(project_procs),
+        "builtin_procedures_count": len(procs) - len(project_procs),
         "procedures": [p.uri for p in procs[:10]],
     }
 
