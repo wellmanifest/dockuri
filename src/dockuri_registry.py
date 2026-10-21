@@ -15,6 +15,12 @@ from pathlib import Path
 from typing import Any
 
 
+def default_socket_path(app: str) -> Path:
+    """Where a worker for `app` listens when nothing more specific is configured (DOCK-UDS-001)."""
+    run_dir = os.environ.get("DOCKURI_RUN_DIR")
+    return Path(run_dir) / f"{app}.sock" if run_dir else Path.home() / ".dockuri" / "run" / f"{app}.sock"
+
+
 def _stem_token(w: str) -> str:
     w = w.lower().strip()
     if w.startswith("z") and len(w) > 4 and w[1] in "bcdfgjklmnprstvwz":
@@ -277,7 +283,7 @@ class DockuriRegistry:
                 uri=uri,
                 desc=f"[{app}] {summary} (Route: {route})",
                 effect=effect,
-                transport={"type": "uds", "socket": f"/tmp/dockuri_{app}.sock"},
+                transport={"type": "uds", "socket": str(default_socket_path(app))},
                 schema={"input": input_schema, "output": {"type": "object"}},
                 manifest_path=file_path,
             )
@@ -358,7 +364,7 @@ class DockuriRegistry:
                 uri=uri,
                 desc=act.get("description", f"Action {act_id} in {app}"),
                 effect="mutating" if act.get("mutates", False) else "pure",
-                transport={"type": "uds", "socket": f"/tmp/dockuri_{app}.sock"},
+                transport={"type": "uds", "socket": str(default_socket_path(app))},
                 schema={"input": {"type": "object"}, "output": {"type": "object"}},
                 manifest_path=file_path,
             )

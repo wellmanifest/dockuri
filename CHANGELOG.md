@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- DOCK-UDS-001: sockets are no longer looked up in `/tmp`; candidates must be sockets owned by the user or root with no access for others; registry and reference workers default to `DOCKURI_RUN_DIR` / `~/.dockuri/run`.
 - Conformance no longer registers an echo stub that permanently replaced the matched URI process; dispatch without a safe probe is `INCONCLUSIVE`.
 - `dry_run` of an unregistered URI returns `UNKNOWN_URI` instead of `status=ok, dispatched=true`.
 - `{"ok": false}` results are normalized to `status=error`; the `uri` CLI exits non-zero for them.

@@ -11,6 +11,7 @@ import json
 import os
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import time
@@ -254,28 +255,22 @@ def render_uri_call_snippet(
 _PROJECT_MANIFEST_CACHE: dict[Path, tuple[int, Any]] = {}
 
 
+def _socket_is_trusted(path: Path) -> bool:
+    """DOCK-UDS-001: a socket must be a socket owned by this user or root, with no access for others (0660/0600)."""
+    try:
+        st = path.stat()
+    except OSError:
+        return False
+    return stat.S_ISSOCK(st.st_mode) and not (st.st_mode & 0o007) and st.st_uid in (os.getuid(), 0)
+
+
 def _resolve_uds_socket(app: str = "daemon", explicit: str | None = None) -> str | None:
-    """Resolve Unix Domain Socket path per DOCK-UDS-001 hierarchy."""
-    if explicit and os.path.exists(str(explicit)):
-        return str(explicit)
-    env_sock = os.environ.get("DOCKURI_SOCKET")
-    if env_sock and os.path.exists(env_sock):
-        return env_sock
-    run_dir = os.environ.get("DOCKURI_RUN_DIR")
-    if run_dir:
-        cand = Path(run_dir) / f"{app}.sock"
-        if cand.exists():
-            return str(cand)
-    system_cand = Path(f"/run/dockuri/{app}.sock")
-    if system_cand.exists():
-        return str(system_cand)
-    user_cand = Path.home() / ".dockuri" / "run" / f"{app}.sock"
-    if user_cand.exists():
-        return str(user_cand)
-    for tmp_cand in (Path(f"/tmp/dockuri_{app}.sock"), Path("/tmp/dockuri_daemon.sock"), Path("/tmp/dockuri.sock")):
-        if tmp_cand.exists():
-            return str(tmp_cand)
-    return None
+    """Resolve the worker socket per DOCK-UDS-001; world-writable locations such as /tmp are not searched."""
+    candidates = [explicit, os.environ.get("DOCKURI_SOCKET")]
+    if os.environ.get("DOCKURI_RUN_DIR"):
+        candidates.append(str(Path(os.environ["DOCKURI_RUN_DIR"]) / f"{app}.sock"))
+    candidates += [f"/run/dockuri/{app}.sock", str(Path.home() / ".dockuri" / "run" / f"{app}.sock")]
+    return next((str(c) for c in candidates if c and _socket_is_trusted(Path(c))), None)
 
 
 def is_failure(result: Any) -> bool:

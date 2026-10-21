@@ -62,6 +62,8 @@ Komunikacja pomiędzy orkiestratorem Dockuri a workerem odbywa się za pomocą r
    * Standardowa ścieżka systemowa `/run/dockuri/<app>.sock` (jeśli proces ma uprawnienia zapisu).
    * Ścieżka użytkownika `~/.dockuri/run/<app>.sock`.
 2. Plik gniazda musi posiadać uprawnienia `0660` (lub `0600`), umożliwiając dostęp uprawnionym procesom użytkownika lub grupy wykonawczej.
+3. Ogólnodostępne katalogi (np. `/tmp`) nie należą do hierarchii i nie wolno ich przeszukiwać ani używać jako domyślnych: dowolny użytkownik mógłby tam podstawić gniazdo i przejąć wywołania. Worker bez jawnej konfiguracji nasłuchuje w `DOCKURI_RUN_DIR/<app>.sock`, a w braku tej zmiennej w `~/.dockuri/run/<app>.sock` (katalog `0700`).
+4. Klient przed połączeniem sprawdza, że ścieżka jest gniazdem, należy do bieżącego użytkownika lub `root` i nie daje dostępu „innym” (`mode & 0o007 == 0`). Kandydat niespełniający warunku jest pomijany, nawet jeśli wskazano go jawnie.
 
 ### `DOCK-SHM-001: Zero-Copy Shared Memory Protocol`
 1. Dla ładunków przekraczających 64 KB (np. wideo, dźwięk, ramki graficzne, tablice numpy/safetensors) dane są umieszczane w pamięci RAM `/dev/shm/dockuri/<buffer_id>`.

@@ -121,10 +121,20 @@ def test_is_failure_truthful_envelope():
     assert is_failure({"status": "ok"}) is False
 
 
+def _bind(path: Path, mode: int = 0o600):
+    import socket as _socket
+    s = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+    s.bind(str(path))
+    path.chmod(mode)
+    return s
+
+
 def test_resolve_uds_socket_hierarchy(tmp_path: Path, monkeypatch):
     from src.dockuri_client import _resolve_uds_socket
+    monkeypatch.delenv("DOCKURI_SOCKET", raising=False)
+    monkeypatch.delenv("DOCKURI_RUN_DIR", raising=False)
     dummy_sock = tmp_path / "custom.sock"
-    dummy_sock.touch()
+    keep = [_bind(dummy_sock)]
 
     # 1. Explicit
     assert _resolve_uds_socket("custom", str(dummy_sock)) == str(dummy_sock)
@@ -137,7 +147,44 @@ def test_resolve_uds_socket_hierarchy(tmp_path: Path, monkeypatch):
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     app_sock = run_dir / "my_app.sock"
-    app_sock.touch()
+    keep.append(_bind(app_sock, 0o660))
     monkeypatch.delenv("DOCKURI_SOCKET")
     monkeypatch.setenv("DOCKURI_RUN_DIR", str(run_dir))
     assert _resolve_uds_socket("my_app") == str(app_sock)
+    for s in keep:
+        s.close()
+
+
+def test_resolve_uds_socket_rejects_untrusted_candidates(tmp_path: Path, monkeypatch):
+    from src.dockuri_client import _resolve_uds_socket
+    monkeypatch.delenv("DOCKURI_SOCKET", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    monkeypatch.setenv("DOCKURI_RUN_DIR", str(run_dir))
+    # A regular file is not a socket.
+    (run_dir / "plain.sock").touch()
+    assert _resolve_uds_socket("plain") is None
+    # A socket other users can reach violates DOCK-UDS-001 (0660/0600).
+    s = _bind(run_dir / "open.sock", 0o666)
+    try:
+        assert _resolve_uds_socket("open") is None
+    finally:
+        s.close()
+
+
+def test_tmp_is_never_searched_for_sockets(tmp_path: Path, monkeypatch):
+    import os
+    from src.dockuri_client import _resolve_uds_socket
+    for name in ("DOCKURI_SOCKET", "DOCKURI_RUN_DIR"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    app = f"uds-test-{os.getpid()}"
+    planted = Path(f"/tmp/dockuri_{app}.sock")
+    s = _bind(planted)
+    try:
+        assert _resolve_uds_socket(app) is None
+    finally:
+        s.close()
+        planted.unlink(missing_ok=True)
+
