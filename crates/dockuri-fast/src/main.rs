@@ -280,10 +280,24 @@ fn search_nl<'a>(procs: &'a [IndexedProcedure], query: &str) -> Vec<&'a IndexedP
     scored.into_iter().map(|(_, p)| p).collect()
 }
 
+/// Per-user cache location shared with `dockuri_registry.default_cache_path`; never a world-writable directory such as /tmp.
+fn default_cache_path() -> PathBuf {
+    let env_dir = |key: &str| std::env::var_os(key).filter(|v| !v.is_empty()).map(PathBuf::from);
+    let dir = env_dir("DOCKURI_CACHE_DIR")
+        .or_else(|| env_dir("XDG_CACHE_HOME").map(|d| d.join("dockuri")))
+        .or_else(|| env_dir("HOME").map(|h| h.join(".cache").join("dockuri")))
+        .unwrap_or_else(|| PathBuf::from(".dockuri-cache"));
+    dir.join("fast_cache.json")
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let scan_dir = if args.len() > 1 { &args[1] } else { "/home/tom/github/urirun-connectors" };
-    let cache_file = PathBuf::from("/tmp/dockuri_fast_cache.json");
+    let scan_dir = args.get(1).cloned().or_else(|| std::env::var("DOCKURI_SCAN_ROOT").ok()).unwrap_or_else(|| ".".to_string());
+    let scan_dir = scan_dir.as_str();
+    let cache_file = default_cache_path();
+    if let Some(parent) = cache_file.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
 
     println!("============================================================");
     println!("🦀 DOCKURI-FAST: RUST SCANNER & REGISTRY BENCHMARK");

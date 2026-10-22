@@ -188,3 +188,15 @@ def test_tmp_is_never_searched_for_sockets(tmp_path: Path, monkeypatch):
         s.close()
         planted.unlink(missing_ok=True)
 
+
+
+def test_fast_cache_path_is_per_user_and_never_tmp(tmp_path: Path, monkeypatch):
+    from src.dockuri_registry import default_cache_path
+    for name in ("DOCKURI_CACHE_DIR", "XDG_CACHE_HOME"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    assert default_cache_path() == tmp_path / "home" / ".cache" / "dockuri" / "fast_cache.json"
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
+    assert default_cache_path() == tmp_path / "xdg" / "dockuri" / "fast_cache.json"
+    monkeypatch.setenv("DOCKURI_CACHE_DIR", str(tmp_path / "explicit"))
+    assert default_cache_path("x.json") == tmp_path / "explicit" / "x.json"

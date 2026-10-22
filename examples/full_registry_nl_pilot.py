@@ -2,7 +2,7 @@
 """Large-Scale Practical Pilot: NL Search and DAG Synthesis across ~/github/**
 
 Operates over the live content-addressed registry of 690+ procedures discovered
-across 100+ manifests in /home/tom/github.
+across 100+ manifests in the workspace scanned by dockuri-fast.
 """
 
 from __future__ import annotations
@@ -13,7 +13,10 @@ import sys
 import time
 from pathlib import Path
 
-CACHE_FILE = Path("/tmp/dockuri_fast_cache.json")
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from src.dockuri_registry import default_cache_path
+
+CACHE_FILE = default_cache_path()
 
 
 def load_cached_procedures() -> list[dict]:
@@ -128,7 +131,7 @@ def main():
             "depends_on": ["step2_validate_invoice"],
             "input": {
                 "markdown": {"$from": "step2_validate_invoice", "path": "/summary_markdown"},
-                "out_path": "/tmp/invoice_report.pdf"
+                "out_path": "invoice_report.pdf"
             }
         },
         {

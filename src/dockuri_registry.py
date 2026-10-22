@@ -21,6 +21,14 @@ def default_socket_path(app: str) -> Path:
     return Path(run_dir) / f"{app}.sock" if run_dir else Path.home() / ".dockuri" / "run" / f"{app}.sock"
 
 
+def default_cache_path(name: str = "fast_cache.json") -> Path:
+    """Per-user cache location shared with dockuri-fast; never a world-writable directory such as /tmp."""
+    cache_dir = os.environ.get("DOCKURI_CACHE_DIR")
+    if not cache_dir:
+        cache_dir = str(Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "dockuri")
+    return Path(cache_dir) / name
+
+
 def _stem_token(w: str) -> str:
     w = w.lower().strip()
     if w.startswith("z") and len(w) > 4 and w[1] in "bcdfgjklmnprstvwz":
