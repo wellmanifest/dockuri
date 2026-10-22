@@ -67,3 +67,22 @@ def test_registry_scan_and_nl_search():
     # 5. Test GBNF Grammar Export
     grammar = reg.export_gbnf_grammar([b64_rec])
     assert '"base64.encode"' in grammar
+
+
+def test_proc_v2_declared_effect_wins_and_commands_are_never_pure():
+    reg = DockuriRegistry()
+    reg.register_dockuri_yaml_manifest({"processes": [
+        {"uri": "c2004://test-head/inflate/command/start", "effect": "idempotent"},
+        {"uri": "c2004://test-head/deflate/command/start"},
+        {"uri": "c2004://sensors/pressure/query/read"},
+        {"uri": "c2004://sensors/pressure/query/read-all", "effect": "unknown-word"},
+        {"uri": "proc://store/item/upsert/v1"},
+    ]}, "dockuri.yaml")
+    effects = {r.uri: r.effect for r in reg.procedures.values()}
+    assert effects == {
+        "c2004://test-head/inflate/command/start": "idempotent",
+        "c2004://test-head/deflate/command/start": "mutating",
+        "c2004://sensors/pressure/query/read": "pure",
+        "c2004://sensors/pressure/query/read-all": "pure",
+        "proc://store/item/upsert/v1": "mutating",
+    }
