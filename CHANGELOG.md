@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- `register_dockuri_yaml_manifest` uses the declared proc-v2 `effect` (`pure | idempotent | mutating`); the URI-word guess is only a fallback and never marks a `/command/` process `pure` (hardware commands such as `c2004://test-head/inflate/command/start` were registered as side-effect free).
 - Conformance no longer registers an echo stub that permanently replaced the matched URI process; dispatch without a safe probe is `INCONCLUSIVE`.
 - `dry_run` of an unregistered URI returns `UNKNOWN_URI` instead of `status=ok, dispatched=true`.
 - `{"ok": false}` results are normalized to `status=error`; the `uri` CLI exits non-zero for them.

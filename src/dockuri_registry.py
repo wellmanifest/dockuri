@@ -105,6 +105,18 @@ def _safe_yaml_load(stream: Any) -> Any:
     return yaml.load(stream, Loader=loader)
 
 
+_EFFECTS = ("pure", "idempotent", "mutating")
+
+
+def _declared_or_inferred_effect(declared: Any, uri: str) -> str:
+    """Declared proc-v2 effect wins; a guess never marks a command side-effect free."""
+    if declared in _EFFECTS:
+        return declared
+    if "/command/" in uri or any(w in uri for w in ("modify", "relocate", "upsert", "delete", "heal")):
+        return "mutating"
+    return "pure"
+
+
 class DockuriRegistry:
     def __init__(self):
         self.procedures: dict[str, ProcedureRecord] = {}
@@ -211,7 +223,7 @@ class DockuriRegistry:
             proc_sub = ".".join(parts[1:]) if len(parts) > 1 else "run"
             proc_name = f"{app}.{proc_sub}"
             desc = str(item.get("description") or f"Process {uri}")
-            effect = "mutating" if any(w in uri for w in ("modify", "relocate", "upsert", "delete", "heal")) else "pure"
+            effect = _declared_or_inferred_effect(item.get("effect"), uri)
             record = ProcedureRecord(
                 app=app,
                 proc=proc_name,
