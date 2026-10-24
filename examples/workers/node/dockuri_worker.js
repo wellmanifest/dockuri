@@ -8,13 +8,14 @@ const net = require('net');
 const fs = require('fs');
 const readline = require('readline');
 
-const SOCKET_PATH = process.env.DOCKURI_SOCKET || '/tmp/dockuri_node_ref.sock';
+const SOCKET_PATH = process.env.DOCKURI_SOCKET || require('path').join(process.env.DOCKURI_RUN_DIR || require('path').join(require('os').homedir(), '.dockuri', 'run'), 'node_ref.sock'); // DOCK-UDS-001: never /tmp
 
 const REGISTRY = {
   'string.slugify': ({ text }) => text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''),
   'math.multiply': ({ a, b }) => a * b
 };
 
+fs.mkdirSync(require('path').dirname(SOCKET_PATH), { recursive: true, mode: 0o700 });
 if (fs.existsSync(SOCKET_PATH)) {
   try { fs.unlinkSync(SOCKET_PATH); } catch (e) {}
 }

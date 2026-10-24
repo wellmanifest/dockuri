@@ -21,27 +21,27 @@ from pathlib import Path
 DOCKURI_ROOT = Path(__file__).parent.parent.resolve()
 sys.path.insert(0, str(DOCKURI_ROOT))
 
-from src.dockuri_registry import DockuriRegistry
+from src.dockuri_registry import DockuriRegistry, default_socket_path
 from src.dockuri_llm_pipeline import (
     build_llm_context,
     validate_pipeline_dag,
     execute_pipeline_dag,
 )
 
+# Workspace that holds the sibling connector checkouts (DOCKURI_PROJECTS_ROOT, default: the parent of wellmanifest/).
+WORKSPACE = Path(os.environ.get("DOCKURI_PROJECTS_ROOT") or Path(__file__).resolve().parents[2])
 PROJECTS = [
-    Path("/home/tom/github/urirun-connectors/urirun-connector-fs"),
-    Path("/home/tom/github/urirun-connectors/urirun-connector-base64"),
-    Path("/home/tom/github/if-uri/curi"),
+    WORKSPACE / "urirun-connectors" / "urirun-connector-fs",
+    WORKSPACE / "urirun-connectors" / "urirun-connector-base64",
+    WORKSPACE / "if-uri" / "curi",
 ]
 
-SOCKS = {
-    "fs": "/tmp/pilot_workflow_fs.sock",
-    "b64": "/tmp/pilot_workflow_b64.sock",
-    "curi": "/tmp/pilot_workflow_curi.sock",
-}
+# DOCK-UDS-001: sockets live in the private run directory, never in /tmp.
+SOCKS = {name: str(default_socket_path(f"pilot_workflow_{name}")) for name in ("fs", "b64", "curi")}
 
 
 def start_daemons() -> list[subprocess.Popen]:
+    Path(SOCKS["fs"]).parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     for s in SOCKS.values():
         if os.path.exists(s):
             try:

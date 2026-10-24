@@ -21,15 +21,20 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.dockuri_client import DockuriClient, run_pipeline
+from src.dockuri_registry import default_socket_path
 
-B64_DIR = Path("/home/tom/github/urirun-connectors/urirun-connector-base64")
-CURI_DIR = Path("/home/tom/github/if-uri/curi")
+# Workspace that holds the sibling connector checkouts (DOCKURI_PROJECTS_ROOT, default: the parent of wellmanifest/).
+WORKSPACE = Path(os.environ.get("DOCKURI_PROJECTS_ROOT") or Path(__file__).resolve().parents[2])
+B64_DIR = WORKSPACE / "urirun-connectors" / "urirun-connector-base64"
+CURI_DIR = WORKSPACE / "if-uri" / "curi"
 
-B64_SOCK = "/tmp/pilot_dockuri_b64.sock"
-CURI_SOCK = "/tmp/pilot_dockuri_curi.sock"
+# DOCK-UDS-001: sockets live in the private run directory, never in /tmp.
+B64_SOCK = str(default_socket_path("pilot_dockuri_b64"))
+CURI_SOCK = str(default_socket_path("pilot_dockuri_curi"))
 
 
 def start_daemons() -> tuple[subprocess.Popen, subprocess.Popen]:
+    Path(B64_SOCK).parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     for s in (B64_SOCK, CURI_SOCK):
         if os.path.exists(s):
             try:

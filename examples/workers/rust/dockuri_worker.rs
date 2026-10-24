@@ -3,7 +3,7 @@
 
 use std::error::Error;
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::time::Instant;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
@@ -11,9 +11,17 @@ use serde_json::{json, Value};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    // DOCK-UDS-001: never /tmp; default to the private per-user run directory.
+    let run_dir = std::env::var("DOCKURI_RUN_DIR").unwrap_or_else(|_| {
+        format!("{}/.dockuri/run", std::env::var("HOME").unwrap_or_else(|_| ".".to_string()))
+    });
     let socket_path = std::env::var("DOCKURI_SOCKET")
-        .unwrap_or_else(|_| "/tmp/dockuri_rust_ref.sock".to_string());
+        .unwrap_or_else(|_| format!("{}/rust_ref.sock", run_dir));
 
+    if let Some(parent) = std::path::Path::new(&socket_path).parent() {
+        // Mode applies only to directories created here, like os.makedirs(mode=0o700) in the Python worker.
+        fs::DirBuilder::new().recursive(true).mode(0o700).create(parent)?;
+    }
     let _ = fs::remove_file(&socket_path);
     let listener = UnixListener::bind(&socket_path)?;
     fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o660))?;

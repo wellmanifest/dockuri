@@ -15,7 +15,7 @@ import sys
 import time
 from typing import Any, Callable
 
-SOCKET_PATH = os.getenv("DOCKURI_SOCKET", "/tmp/dockuri_python_ref.sock")
+SOCKET_PATH = os.getenv("DOCKURI_SOCKET") or os.path.join(os.getenv("DOCKURI_RUN_DIR") or os.path.expanduser("~/.dockuri/run"), "python_ref.sock")  # DOCK-UDS-001: never /tmp
 
 # Pre-warmed procedure registry
 REGISTRY: dict[str, Callable[..., Any]] = {
@@ -74,6 +74,7 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
 
 
 async def run_server() -> None:
+    os.makedirs(os.path.dirname(SOCKET_PATH), mode=0o700, exist_ok=True)
     if os.path.exists(SOCKET_PATH):
         try:
             os.remove(SOCKET_PATH)
