@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -312,6 +313,9 @@ def handle_call_uri(args: Dict[str, Any]) -> Any:
     return res
 
 
+_EFFECT_RANK = {"pure": 0, "read": 0, "unknown": 1, "write": 2, "mutating": 2}
+
+
 def handle_search_procedures(args: Dict[str, Any]) -> Dict[str, Any]:
     query = args["query"]
     limit = int(args.get("limit", 5))
@@ -320,14 +324,34 @@ def handle_search_procedures(args: Dict[str, Any]) -> Dict[str, Any]:
 
     t0 = time.perf_counter()
     reg = get_cached_registry(scan_dir)
-    results = reg.search_for_nl(query, limit=limit)
+    candidates = [r.to_dict() for r in reg.search_for_nl(query, limit=limit)]
+    catalog_total = 0
+    if len(candidates) < limit:
+        # Project manifests hold few procedures; the Dockuri catalog holds the reusable ones.
+        catalog = uri("proc://system/process/prompt-registry/v1", {"action": "llm_context", "query": query, "top_k": 20})
+        if isinstance(catalog, dict) and catalog.get("status") == "ok":
+            catalog_total = int(catalog.get("total_registry_count") or 0)
+            tokens = {t for t in re.findall(r"\w+", query.casefold()) if len(t) > 1}
+            seen = {c.get("uri") for c in candidates}
+            for entry in catalog.get("shortlist") or []:
+                text = f"{entry.get('uri', '')} {entry.get('name', '')} {entry.get('description', '')}".casefold()
+                # The shortlist is padded to top_k; keep only entries that actually match the query.
+                if entry.get("uri") in seen or not any(t in text for t in tokens):
+                    continue
+                candidates.append({"uri": entry["uri"], "description": entry.get("description", ""), "source": "dockuri_catalog",
+                                   "effect": entry.get("effect", "unknown"), "aliases": entry.get("aliases", [])})
+                seen.add(entry["uri"])
+                if len(candidates) >= limit:
+                    break
+    # Matches are guesses: never present a state-changing procedure ahead of a read/pure one.
+    candidates.sort(key=lambda c: _EFFECT_RANK.get(c.get("effect") or "unknown", 1))
     t1 = time.perf_counter()
 
     return {
         "query": query,
-        "total_indexed": len(reg.procedures),
+        "total_indexed": len(reg.procedures) + catalog_total,
         "duration_ms": round((t1 - t0) * 1000.0, 3),
-        "candidates": [r.to_dict() for r in results],
+        "candidates": candidates,
     }
 
 
