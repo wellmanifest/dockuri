@@ -104,9 +104,9 @@ REQUIRED_PROMPT_IDS = (
 
 
 def validate_proc_v2_manifest(manifest_path: Path) -> dict[str, Any]:
-    """Validate a dockuri/proc-v2 YAML or JSON process catalog (DOCK-URI-001, DOCK-LFC-001)."""
+    """Validate a dockuri/proc-v2 YAML or unified dockuri.json process catalog (DOCK-URI-001, DOCK-LFC-001)."""
     if manifest_path.is_dir():
-        for rel in ("dockuri.yaml", "dockuri/dockuri.yaml"):
+        for rel in ("dockuri.yaml", "dockuri/dockuri.yaml", "dockuri.json", ".dockuri/dockuri.json"):
             candidate = manifest_path / rel
             if candidate.is_file():
                 manifest_path = candidate
@@ -125,6 +125,28 @@ def validate_proc_v2_manifest(manifest_path: Path) -> dict[str, Any]:
         data = yaml.safe_load(raw_text) or {}
     else:
         data = json.loads(raw_text)
+
+    # Support unified dockuri.json (DOCK-MAN-001 + DOCK-URI-001) as a proc-v2 catalog
+    if "procedures" in data and isinstance(data["procedures"], dict) and "processes" not in data:
+        validate_manifest(manifest_path)
+        app = data.get("app", "app")
+        default_run = data.get("transport", {}).get("spawn_cmd") or ["uri"]
+        synthesized = []
+        for proc_name, defn in data["procedures"].items():
+            if not isinstance(defn, dict):
+                continue
+            proc_uri = defn.get("uri") or f"proc://{app}/{proc_name.replace('.', '/')}/v1"
+            synthesized.append({
+                "uri": proc_uri,
+                "aliases": defn.get("aliases", []),
+                "run": defn.get("run") or default_run,
+                "effect": defn.get("effect", "pure"),
+                "description": defn.get("description", ""),
+            })
+        data = {
+            "version": "dockuri/proc-v2",
+            "processes": synthesized,
+        }
 
     if data.get("version") != "dockuri/proc-v2":
         raise ValueError(f"Invalid proc-v2 version '{data.get('version')}' (expected 'dockuri/proc-v2')")

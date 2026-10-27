@@ -118,3 +118,47 @@ def test_conformance_fails_when_no_route_is_registered(tmp_path):
     assert result["matched_uri"] is None
     assert result["dispatch_attempted"] is False
 
+
+def test_unified_dockuri_json_satisfies_both_manifest_and_proc_v2(tmp_path):
+    from src.dockuri_check import validate_manifest, validate_proc_v2_manifest
+
+    manifest = {
+        "$schema": "https://wellmanifest.org/schemas/dockuri-v1.json",
+        "app": "edialog",
+        "version": "0.4.5",
+        "transport": {
+            "type": "uds",
+            "socket": "~/.dockuri/run/edialog.sock",
+            "spawn_cmd": ["edialog-mcp", "daemon"],
+        },
+        "procedures": {
+            "nl.parse": {
+                "uri": "proc://edialog/nl/parse/v1",
+                "aliases": ["edialog://nl/parse/v1"],
+                "run": ["edialog-mcp", "uri", "proc://edialog/nl/parse/v1"],
+                "effect": "pure",
+                "description": "Parse NL instruction",
+                "inputSchema": {"type": "object"},
+                "outputSchema": {"type": "object"},
+            },
+            "pipeline.run": {
+                "uri": "proc://edialog/pipeline/run/v1",
+                "aliases": ["proc://edialog/run/instruction/v1"],
+                "run": ["edialog-mcp", "uri", "proc://edialog/pipeline/run/v1"],
+                "effect": "read",
+                "description": "Run full pipeline",
+            },
+        },
+    }
+    m_file = tmp_path / "dockuri.json"
+    m_file.write_text(json.dumps(manifest), encoding="utf-8")
+
+    v1 = validate_manifest(m_file)
+    assert v1["app"] == "edialog"
+
+    v2 = validate_proc_v2_manifest(tmp_path)
+    assert v2["status"] == "PASS"
+    assert v2["process_count"] == 2
+    assert v2["alias_count"] == 2
+
+

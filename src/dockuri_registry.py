@@ -120,12 +120,34 @@ def _safe_yaml_load(stream: Any) -> Any:
 
 
 _EFFECTS = ("pure", "idempotent", "mutating")
+_EFFECT_TO_DOCKURI = {
+    "pure": "pure",
+    "idempotent": "idempotent",
+    "mutating": "mutating",
+    "read": "idempotent",
+    "write": "mutating",
+}
+_EFFECT_TO_MCP = {
+    "pure": "pure",
+    "idempotent": "read",
+    "mutating": "write",
+    "read": "read",
+    "write": "write",
+}
+
+
+def normalize_effect(declared: Any, *, target: str = "dockuri") -> str:
+    """Normalize effect vocabulary between wellmanifest/dockuri and wellmanifest/mcp."""
+    raw = str(declared or "").strip().lower()
+    if target == "mcp":
+        return _EFFECT_TO_MCP.get(raw, "read")
+    return _EFFECT_TO_DOCKURI.get(raw, "pure")
 
 
 def _declared_or_inferred_effect(declared: Any, uri: str) -> str:
     """Declared proc-v2 effect wins; a guess never marks a command side-effect free."""
-    if declared in _EFFECTS:
-        return declared
+    if isinstance(declared, str) and declared.strip().lower() in _EFFECT_TO_DOCKURI:
+        return _EFFECT_TO_DOCKURI[declared.strip().lower()]
     if "/command/" in uri or any(w in uri for w in ("modify", "relocate", "upsert", "delete", "heal")):
         return "mutating"
     return "pure"
@@ -259,20 +281,49 @@ class DockuriRegistry:
         count = 0
 
         for proc_name, defn in procs.items():
-            uri = f"proc://{app}/{proc_name.replace('.', '/')}/v1"
+            uri = str(defn.get("uri") or f"proc://{app}/{proc_name.replace('.', '/')}/v1")
+            schema = defn.get("schema")
+            if not schema and ("inputSchema" in defn or "outputSchema" in defn):
+                schema = {
+                    "input": defn.get("inputSchema", {"type": "object"}),
+                    "output": defn.get("outputSchema", {"type": "object"}),
+                }
             record = ProcedureRecord(
                 app=app,
                 proc=proc_name,
                 uri=uri,
                 desc=defn.get("description", ""),
-                effect=defn.get("effect", "pure"),
+                effect=_declared_or_inferred_effect(defn.get("effect", "pure"), uri),
                 transport=transport,
-                schema=defn.get("schema", {}),
+                schema=schema or {},
                 manifest_path=file_path,
             )
             self.procedures[proc_name] = record
             count += 1
         return count
+
+    def to_mcp_registry(self, *, app: str | None = None, version: str = "1.0.0") -> dict[str, Any]:
+        """Project registered Dockuri procedures into a wellmanifest.mcp/registry/v1 manifest."""
+        operations = []
+        for proc_name, rec in sorted(self.procedures.items()):
+            if app and rec.app != app:
+                continue
+            op_id = proc_name if proc_name.startswith(f"{rec.app}.") else f"{rec.app}.{proc_name}"
+            operations.append({
+                "id": op_id,
+                "uri": rec.uri,
+                "description": rec.desc,
+                "owner": rec.app,
+                "effect": normalize_effect(rec.effect, target="mcp"),
+                "inputSchema": rec.schema.get("input", {"type": "object"}),
+                "outputSchema": rec.schema.get("output", {"type": "object"}),
+            })
+        return {
+            "schema": "wellmanifest.mcp/registry/v1",
+            "version": version,
+            "app": app or "dockuri",
+            "operations": operations,
+        }
 
     def register_connector_manifest(self, data: dict[str, Any], file_path: str) -> int:
         """Adapt a urirun connector.manifest.json into canonical ProcedureRecords."""

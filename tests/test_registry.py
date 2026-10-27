@@ -86,3 +86,40 @@ def test_proc_v2_declared_effect_wins_and_commands_are_never_pure():
         "c2004://sensors/pressure/query/read-all": "pure",
         "proc://store/item/upsert/v1": "mutating",
     }
+
+
+def test_unified_manifest_mcp_projection_and_effect_normalization():
+    from src.dockuri_registry import normalize_effect
+
+    assert normalize_effect("read", target="dockuri") == "idempotent"
+    assert normalize_effect("write", target="dockuri") == "mutating"
+    assert normalize_effect("idempotent", target="mcp") == "read"
+    assert normalize_effect("mutating", target="mcp") == "write"
+
+    reg = DockuriRegistry()
+    reg.register_manifest(
+        {
+            "app": "edialog",
+            "version": "0.4.5",
+            "transport": {"type": "uds", "socket": "~/.dockuri/run/edialog.sock"},
+            "procedures": {
+                "pipeline.run": {
+                    "uri": "proc://edialog/pipeline/run/v1",
+                    "effect": "read",
+                    "description": "Run 6-stage pipeline",
+                    "inputSchema": {"type": "object"},
+                    "outputSchema": {"type": "object"},
+                }
+            },
+        },
+        "/dummy/edialog/dockuri.json",
+    )
+    rec = reg.procedures["pipeline.run"]
+    assert rec.uri == "proc://edialog/pipeline/run/v1"
+    assert rec.effect == "idempotent"
+
+    mcp_reg = reg.to_mcp_registry(app="edialog", version="0.4.5")
+    assert mcp_reg["schema"] == "wellmanifest.mcp/registry/v1"
+    assert mcp_reg["operations"][0]["effect"] == "read"
+    assert mcp_reg["operations"][0]["uri"] == "proc://edialog/pipeline/run/v1"
+

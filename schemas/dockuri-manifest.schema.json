@@ -75,11 +75,29 @@
         "required": ["effect"],
         "additionalProperties": false,
         "properties": {
+          "uri": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9+.-]*://.+$",
+            "description": "Optional canonical URI override (e.g. proc://app/module/action/v1)."
+          },
+          "aliases": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9+.-]*://.+$"
+            },
+            "description": "Optional backward-compatible URI aliases."
+          },
+          "run": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Optional CLI command array for proc-v2 / CLI execution parity."
+          },
           "description": { "type": "string" },
           "effect": {
             "type": "string",
-            "enum": ["pure", "idempotent", "mutating"],
-            "description": "Purity and side-effect contract of the procedure."
+            "enum": ["pure", "idempotent", "mutating", "read", "write"],
+            "description": "Purity and side-effect contract of the procedure (supports both Dockuri and MCP effect vocabularies)."
           },
           "timeout_ms": {
             "type": "integer",
@@ -90,6 +108,8 @@
             "type": "boolean",
             "default": false
           },
+          "inputSchema": { "type": "object" },
+          "outputSchema": { "type": "object" },
           "schema": {
             "type": "object",
             "properties": {
