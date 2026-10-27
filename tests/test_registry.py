@@ -94,7 +94,8 @@ def test_unified_manifest_mcp_projection_and_effect_normalization():
     assert normalize_effect("read", target="dockuri") == "idempotent"
     assert normalize_effect("write", target="dockuri") == "mutating"
     assert normalize_effect("idempotent", target="mcp") == "read"
-    assert normalize_effect("mutating", target="mcp") == "write"
+    assert normalize_effect("mutating", target="mcp") == "mutating"
+    assert normalize_effect("write", target="mcp") == "mutating"
 
     reg = DockuriRegistry()
     reg.register_manifest(
@@ -120,6 +121,9 @@ def test_unified_manifest_mcp_projection_and_effect_normalization():
 
     mcp_reg = reg.to_mcp_registry(app="edialog", version="0.4.5")
     assert mcp_reg["schema"] == "wellmanifest.mcp/registry/v1"
+    assert mcp_reg["revision"] == "0.4.5"
+    assert mcp_reg["operations"][0]["id"] == "edialog_pipeline_run"
     assert mcp_reg["operations"][0]["effect"] == "read"
+    assert mcp_reg["operations"][0]["available"] is True
     assert mcp_reg["operations"][0]["uri"] == "proc://edialog/pipeline/run/v1"
 

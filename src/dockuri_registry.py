@@ -130,10 +130,21 @@ _EFFECT_TO_DOCKURI = {
 _EFFECT_TO_MCP = {
     "pure": "pure",
     "idempotent": "read",
-    "mutating": "write",
+    "mutating": "mutating",
     "read": "read",
-    "write": "write",
+    "write": "mutating",
 }
+
+
+def _mcp_operation_id(app: str, proc_name: str, digest: str) -> str:
+    """Format a procedure identifier to satisfy wellmanifest.mcp/registry/v1 ^[a-z][a-z0-9_-]{0,63}$."""
+    raw = proc_name if proc_name.startswith(f"{app}.") or proc_name.startswith(f"{app}_") else f"{app}_{proc_name}"
+    slug = re.sub(r"[^a-z0-9_-]+", "_", raw.lower()).strip("_-")
+    if not slug or not slug[0].isalpha():
+        slug = f"op_{slug}"
+    if len(slug) > 64:
+        slug = f"{slug[:55]}_{digest[:8]}"
+    return slug
 
 
 def normalize_effect(declared: Any, *, target: str = "dockuri") -> str:
@@ -302,26 +313,35 @@ class DockuriRegistry:
             count += 1
         return count
 
-    def to_mcp_registry(self, *, app: str | None = None, version: str = "1.0.0") -> dict[str, Any]:
+    def to_mcp_registry(
+        self,
+        *,
+        app: str | None = None,
+        revision: str | None = None,
+        version: str = "1.0.0",
+        expires_at: str = "2099-12-31T23:59:59Z",
+    ) -> dict[str, Any]:
         """Project registered Dockuri procedures into a wellmanifest.mcp/registry/v1 manifest."""
         operations = []
         for proc_name, rec in sorted(self.procedures.items()):
             if app and rec.app != app:
                 continue
-            op_id = proc_name if proc_name.startswith(f"{rec.app}.") else f"{rec.app}.{proc_name}"
+            op_id = _mcp_operation_id(rec.app, proc_name, rec.contract_digest)
             operations.append({
                 "id": op_id,
                 "uri": rec.uri,
-                "description": rec.desc,
+                "description": rec.desc or f"Procedure {rec.uri}",
                 "owner": rec.app,
                 "effect": normalize_effect(rec.effect, target="mcp"),
+                "available": True,
+                "deploymentRevision": rec.contract_digest,
                 "inputSchema": rec.schema.get("input", {"type": "object"}),
                 "outputSchema": rec.schema.get("output", {"type": "object"}),
             })
         return {
             "schema": "wellmanifest.mcp/registry/v1",
-            "version": version,
-            "app": app or "dockuri",
+            "revision": revision or version,
+            "expiresAt": expires_at,
             "operations": operations,
         }
 
