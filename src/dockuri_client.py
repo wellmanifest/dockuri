@@ -329,21 +329,30 @@ def _invoke_single(clean_uri: str, params: dict[str, Any], socket_path: str | No
     if proj_dir:
         p_path = Path(str(proj_dir)).expanduser()
         proj_path_resolved = p_path.resolve() if p_path.exists() else p_path
-        for m_name in ("dockuri.yaml", "dockuri.yml", ".dockuri/dockuri.yaml"):
+        for m_name in ("dockuri.yaml", "dockuri.yml", "dockuri.json", ".dockuri/dockuri.yaml", ".dockuri/dockuri.json"):
             mf = p_path / m_name
             if mf.is_file():
                 try:
-                    import yaml  # type: ignore
                     resolved_mf = mf.resolve()
                     mtime = resolved_mf.stat().st_mtime_ns
                     cached = _PROJECT_MANIFEST_CACHE.get(resolved_mf)
                     if cached is not None and cached[0] == mtime:
                         data = cached[1]
                     else:
-                        loader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
-                        data = yaml.load(resolved_mf.read_text(encoding="utf-8"), Loader=loader)
+                        if mf.suffix.lower() == ".json":
+                            data = json.loads(resolved_mf.read_text(encoding="utf-8"))
+                        else:
+                            import yaml  # type: ignore
+                            loader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+                            data = yaml.load(resolved_mf.read_text(encoding="utf-8"), Loader=loader)
                         _PROJECT_MANIFEST_CACHE[resolved_mf] = (mtime, data)
-                    raw_procs = data.get("processes", {}) if isinstance(data, dict) else {}
+                    raw_procs = dict(data.get("processes", {})) if isinstance(data, dict) and isinstance(data.get("processes"), dict) else {}
+                    if isinstance(data, dict) and isinstance(data.get("procedures"), dict):
+                        for pk, pv in data["procedures"].items():
+                            if isinstance(pv, dict):
+                                pu = pv.get("uri") or f"dockuri://{data.get('app', 'app')}/{pk.split('.')[-1]}"
+                                raw_procs[pu] = pv
+                                raw_procs[pk] = pv
                     proc_def = None
                     if isinstance(raw_procs, dict) and clean_uri in raw_procs:
                         proc_def = raw_procs[clean_uri]
@@ -385,6 +394,39 @@ def _invoke_single(clean_uri: str, params: dict[str, Any], socket_path: str | No
         )
     ):
         return _dry_run_resolution(clean_uri, params, proj_path_resolved)
+
+    if clean_uri in ("dockuri://taskand/autonomous-drain", "proc://taskand.dev/autonomous/drain/v1"):
+        if params.get("dry_run"):
+            return {
+                "status": "ok",
+                "uri": clean_uri,
+                "dry_run": True,
+                "dispatched": False,
+                "command": ["python3", "-m", "app.autonomous_drain", "--dry-run"],
+            }
+        taskand_dir = Path.home() / "github" / "paxlet-com" / "taskand"
+        hours = int(params.get("window_hours") or params.get("hours") or 24)
+        cmd = ["python3", "-m", "app.autonomous_drain", "--hours", str(hours)]
+        for r in (params.get("repositories") or params.get("repos") or []):
+            cmd.extend(["--repo", str(r)])
+        try:
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+                cwd=str(taskand_dir) if taskand_dir.is_dir() else None,
+                timeout=float(params.get("timeout_seconds", 300.0)),
+            )
+            return {
+                "status": "ok" if proc.returncode == 0 else "error",
+                "uri": clean_uri,
+                "returncode": proc.returncode,
+                "stdout": proc.stdout.strip(),
+                "stderr": proc.stderr.strip(),
+            }
+        except Exception as exc:
+            return {"status": "error", "uri": clean_uri, "error": {"code": "TASKAND_DRAIN_FAILED", "message": str(exc)}}
 
     parts = urlsplit(clean_uri)
     app = parts.netloc or "daemon"

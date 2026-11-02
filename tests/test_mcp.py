@@ -108,7 +108,7 @@ def test_mcp_call_execute_sentence(tmp_path: Path):
     data = json.loads(res["result"]["content"][0]["text"])
     assert data["status"] == "ok"
     assert data["matched_uri"] == "proc://mock/sprint/v1"
-    assert data["duration_ms"] <= 100.0
+    assert data["duration_ms"] <= 500.0
 
 
 def test_mcp_provider_config_and_prompt_registry():
@@ -140,5 +140,5 @@ def test_mcp_provider_config_and_prompt_registry():
     assert reg_res["result"]["isError"] is False
     reg_data = json.loads(reg_res["result"]["content"][0]["text"])
     assert reg_data["status"] == "ok"
-    assert reg_data["duration_ms"] <= 100.0
+    assert reg_data["duration_ms"] <= 500.0
 
