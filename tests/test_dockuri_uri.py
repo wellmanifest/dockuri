@@ -200,3 +200,37 @@ def test_fast_cache_path_is_per_user_and_never_tmp(tmp_path: Path, monkeypatch):
     assert default_cache_path() == tmp_path / "xdg" / "dockuri" / "fast_cache.json"
     monkeypatch.setenv("DOCKURI_CACHE_DIR", str(tmp_path / "explicit"))
     assert default_cache_path("x.json") == tmp_path / "explicit" / "x.json"
+
+
+def test_taskand_autonomous_drain_dry_run():
+    res = uri("dockuri://taskand/autonomous-drain?dry_run=true")
+    assert isinstance(res, dict)
+    assert res.get("status") == "ok"
+    assert res.get("uri") == "dockuri://taskand/autonomous-drain"
+    assert res.get("dry_run") is True
+    assert "app.autonomous_drain" in " ".join(res.get("command", []))
+
+
+def test_taskand_autonomous_drain_manifest_json(tmp_path: Path):
+    proj_dir = tmp_path / "custom_taskand"
+    proj_dir.mkdir()
+    dockuri_json = proj_dir / "dockuri.json"
+    dockuri_json.write_text(
+        json.dumps({
+            "app": "taskand",
+            "version": "0.1.0",
+            "procedures": {
+                "taskand.autonomous_drain": {
+                    "uri": "dockuri://taskand/autonomous-drain",
+                    "description": "Custom drain runner",
+                    "run": ["echo", "custom-drain"],
+                }
+            }
+        }),
+        encoding="utf-8",
+    )
+    res = uri("dockuri://taskand/autonomous-drain?dry_run=true", {"project": str(proj_dir)})
+    assert isinstance(res, dict)
+    assert res.get("status") == "ok"
+    assert res.get("command") == ["echo", "custom-drain"]
+

@@ -422,6 +422,8 @@ class DockuriRegistry:
             ("system", "system.worktree.promote.v1", "proc://system/worktree/promote/v1", "Promote verified worktrees onto main and prune clean detached staging checkouts", "mutating"),
             ("system", "system.self_improvement.diagnose.v1", "proc://system/self-improvement/diagnose/v1", "Przeprowadź audyt stanu projektu, diagnostykę autonomii i wykonaj testy", "pure"),
             ("system", "system.queue.heal.v1", "proc://system/queue/heal/v1", "Audit and heal stalled task queues and expired leases", "mutating"),
+            ("taskand", "taskand.autonomous_drain.v1", "dockuri://taskand/autonomous-drain", "Autonomiczny 24h cykl drenazu zadan z kolejki Taskand i walidacji PR", "idempotent"),
+            ("taskand", "taskand.autonomous_drain_proc.v1", "proc://taskand.dev/autonomous/drain/v1", "Execute 24h autonomous priority queue drain and PR merge pipeline", "idempotent"),
         ]
         mpath = str(root / "python" / "dockuri_uri.py")
         count = 0
