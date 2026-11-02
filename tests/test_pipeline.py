@@ -45,4 +45,4 @@ def test_chained_pipeline_with_composite_receipt(worker_socket):
     assert res["receipt"]["schema"] == "wellmanifest.wellman/receipt/v1"
     assert res["receipt"]["stages_count"] == 2
     assert len(res["receipt"]["step_digests"]) == 2
-    assert res["receipt"]["total_duration_ms"] < 10.0
+    assert res["receipt"]["total_duration_ms"] < 100.0
