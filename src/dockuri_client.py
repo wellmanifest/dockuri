@@ -312,10 +312,16 @@ def _dispatch_connector(rec: Any, clean_uri: str, params: dict[str, Any]) -> Opt
     if not core_path.is_file():
         return None
 
-    urirun_adapter = Path.home() / "github" / "dockuri" / "urirun" / "adapters" / "python"
-    for p in (str(urirun_adapter), str(pkg_dir.parent)):
-        if p not in sys.path:
-            sys.path.insert(0, p)
+    urirun_candidates = [
+        Path.home() / "github" / "dockuri" / "urirun" / "adapters" / "python",
+        Path("/home/tom/github/dockuri/urirun/adapters/python"),
+        Path("/opt/dockuri/urirun/adapters/python"),
+    ]
+    for uc in urirun_candidates:
+        if uc.is_dir() and str(uc) not in sys.path:
+            sys.path.insert(0, str(uc))
+    if str(pkg_dir.parent) not in sys.path:
+        sys.path.insert(0, str(pkg_dir.parent))
 
     try:
         mod_name = f"urirun_connector_{rec.app.replace('-', '_')}"
@@ -407,7 +413,7 @@ def _invoke_single(clean_uri: str, params: dict[str, Any], socket_path: str | No
         }
 
     # Fast path: check if project-local manifest defines this process
-    proj_dir = params.get("project") or params.get("project_root") or params.get("root")
+    proj_dir = params.pop("proj_path", None) or params.get("project") or params.get("project_root") or params.get("root")
     proj_path_resolved: Path | None = None
     if proj_dir:
         p_path = Path(str(proj_dir)).expanduser()
@@ -531,6 +537,8 @@ def _invoke_single(clean_uri: str, params: dict[str, Any], socket_path: str | No
             for cdir in (
                 Path.home() / "github" / "subactor" / "connectors",
                 Path.home() / "github" / "urirun-connectors",
+                Path("/home/tom/github/subactor/connectors"),
+                Path("/home/tom/github/urirun-connectors"),
             ):
                 if cdir.is_dir():
                     creg = get_cached_registry(cdir)

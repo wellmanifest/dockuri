@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from src.dockuri_check import inspect_project_dockuri_readiness
@@ -49,13 +50,32 @@ def test_builtin_services_alone_do_not_make_project_ready(tmp_path: Path) -> Non
     assert rd["builtin_procedures_count"] > 0
 
 
-def test_registered_connector_hierarchical_semantic_route_dispatch() -> None:
+def test_registered_connector_hierarchical_semantic_route_dispatch(tmp_path: Path) -> None:
     # Issue #200: Reconcile registered Dockuri connector URIs with canonical dispatch
-    target_uri = "proc://subactor-account-twin/subactor/account/query/sources/v1"
-    res = uri(target_uri, {})
+    # Hermetic fixture in tmp_path for CI guarantees
+    conn_dir = tmp_path / "sample_connector"
+    conn_dir.mkdir()
+    manifest_file = conn_dir / "connector.manifest.json"
+    manifest_file.write_text(
+        json.dumps({
+            "id": "sample-twin",
+            "name": "Sample Twin Connector",
+            "routes": ["twin://subactor/account/query/sources"],
+        }),
+        encoding="utf-8",
+    )
+    core_file = conn_dir / "core.py"
+    core_file.write_text(
+        "def query_sources(**kwargs):\n    return {'ok': True, 'sources': ['mock-repo']}\n",
+        encoding="utf-8",
+    )
+
+    target_uri = "proc://sample-twin/subactor/account/query/sources/v1"
+    res = uri(target_uri, {}, proj_path=tmp_path)
     assert isinstance(res, dict)
+    assert res.get("status") == "ok"
     assert res.get("uri") == target_uri
     assert res.get("semantic_route") == "twin://subactor/account/query/sources"
     assert "receipt" in res
     assert res["receipt"]["driver"] == "connector"
-    assert res.get("error", {}).get("code") != "INVALID_URI"
+    assert res.get("result", {}).get("sources") == ["mock-repo"]
