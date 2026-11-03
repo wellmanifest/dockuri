@@ -61,6 +61,7 @@ class ProcedureRecord:
         transport: dict[str, Any],
         schema: dict[str, Any],
         manifest_path: str,
+        semantic_route: str = "",
     ):
         self.app = app
         self.proc = proc
@@ -70,12 +71,13 @@ class ProcedureRecord:
         self.transport = transport
         self.schema = schema
         self.manifest_path = manifest_path
+        self.semantic_route = semantic_route
         self.contract_digest = self._calc_digest()
         self._proc_lower = proc.lower()
         self._uri_lower = uri.lower()
         self._desc_lower = desc.lower()
         self._app_lower = app.lower()
-        search_corpus = f"{self._app_lower} {self._proc_lower} {self._desc_lower} {self._uri_lower}"
+        search_corpus = f"{self._app_lower} {self._proc_lower} {self._desc_lower} {self._uri_lower} {self.semantic_route.lower()}"
         self._corpus_tokens = [t for t in re.findall(r"\w+", search_corpus) if len(t) > 1]
         self._corpus_stems = {_stem_token(t) for t in self._corpus_tokens}
 
@@ -86,6 +88,8 @@ class ProcedureRecord:
             "effect": self.effect,
             "schema": self.schema,
         }
+        if self.semantic_route:
+            data["semantic_route"] = self.semantic_route
         raw = json.dumps(data, sort_keys=True).encode("utf-8")
         return hashlib.sha256(raw).hexdigest()
 
@@ -100,6 +104,7 @@ class ProcedureRecord:
             "schema": self.schema,
             "manifest_path": self.manifest_path,
             "contract_digest": self.contract_digest,
+            "semantic_route": self.semantic_route,
         }
 
 
@@ -167,6 +172,17 @@ def _declared_or_inferred_effect(declared: Any, uri: str) -> str:
 class DockuriRegistry:
     def __init__(self):
         self.procedures: dict[str, ProcedureRecord] = {}
+
+    def get_by_uri(self, uri: str) -> Optional[ProcedureRecord]:
+        for rec in self.procedures.values():
+            if rec.uri == uri or (rec.semantic_route and rec.semantic_route == uri):
+                return rec
+        return None
+
+    def get(self, key: str) -> Optional[ProcedureRecord]:
+        if key in self.procedures:
+            return self.procedures[key]
+        return self.get_by_uri(key)
 
     def scan_path(self, root_dir: str | Path, max_depth: int = 3) -> int:
         """Fast depth-bounded pruned scan for dockuri.yaml, dockuri.json, uriprocess.json, connector.manifest.json, and apx.yaml."""
@@ -377,6 +393,7 @@ class DockuriRegistry:
                 transport={"type": "uds", "socket": str(default_socket_path(app))},
                 schema={"input": input_schema, "output": {"type": "object"}},
                 manifest_path=file_path,
+                semantic_route=route,
             )
             self.procedures[proc_name] = record
             count += 1

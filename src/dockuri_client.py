@@ -7,6 +7,7 @@ with cryptographic CompositeExecutionReceipt.
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import shutil
@@ -15,8 +16,9 @@ import stat
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Optional
 from urllib.parse import parse_qsl, urlsplit, urlunsplit
 
 
@@ -303,6 +305,93 @@ def normalize_result(result: Any) -> Any:
     return result
 
 
+def _dispatch_connector(rec: Any, clean_uri: str, params: dict[str, Any]) -> Optional[dict[str, Any]]:
+    mpath = Path(rec.manifest_path)
+    pkg_dir = mpath.parent
+    core_path = pkg_dir / "core.py"
+    if not core_path.is_file():
+        return None
+
+    urirun_candidates = [
+        Path.home() / "github" / "dockuri" / "urirun" / "adapters" / "python",
+        Path("/home/tom/github/dockuri/urirun/adapters/python"),
+        Path("/opt/dockuri/urirun/adapters/python"),
+    ]
+    for uc in urirun_candidates:
+        if uc.is_dir() and str(uc) not in sys.path:
+            sys.path.insert(0, str(uc))
+    if str(pkg_dir.parent) not in sys.path:
+        sys.path.insert(0, str(pkg_dir.parent))
+
+    try:
+        mod_name = f"urirun_connector_{rec.app.replace('-', '_')}"
+        spec = importlib.util.spec_from_file_location(mod_name, core_path)
+        if spec is None or spec.loader is None:
+            return None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        route = getattr(rec, "semantic_route", "")
+        resource = route.rsplit("/", 1)[-1] if route else ""
+        target_fn = (
+            getattr(mod, f"query_{resource.replace('-', '_')}", None)
+            or getattr(mod, f"command_{resource.replace('-', '_')}", None)
+            or getattr(mod, "_query", None)
+            or getattr(mod, "_command", None)
+        )
+        if target_fn is None:
+            return None
+
+        clean_params = {k: v for k, v in params.items() if not k.startswith("_")}
+        res = target_fn(**clean_params) if getattr(target_fn, "__name__", "") != "_query" else target_fn(resource, **clean_params)
+        is_ok = isinstance(res, dict) and res.get("ok", True) is not False and "error" not in res
+        req_id = f"r-{uuid.uuid4().hex}"
+        urn = f"urn:dockuri:run:connector-{rec.app}:{req_id}"
+
+        response: dict[str, Any] = {
+            "status": "ok" if is_ok else "error",
+            "id": req_id,
+            "ok": is_ok,
+            "uri": clean_uri,
+            "semantic_route": route,
+        }
+        if is_ok:
+            response["result"] = res
+            response["receipt"] = {
+                "status": "completed",
+                "resource_urn": urn,
+                "driver": "connector",
+                "artifacts": [],
+            }
+        else:
+            err_code = (res.get("error") if isinstance(res, dict) else None) or "CONNECTOR_QUERY_FAILED"
+            err_msg = str(res) if isinstance(res, dict) else "Operation failed"
+            response["error"] = {"code": err_code, "message": err_msg, "details": res}
+            response["receipt"] = {
+                "status": "rejected",
+                "resource_urn": urn,
+                "driver": "connector",
+                "artifacts": [],
+            }
+        return response
+    except Exception as exc:
+        req_id = f"r-{uuid.uuid4().hex}"
+        return {
+            "status": "error",
+            "id": req_id,
+            "ok": False,
+            "uri": clean_uri,
+            "semantic_route": getattr(rec, "semantic_route", ""),
+            "error": {"code": "CONNECTOR_EXCEPTION", "message": str(exc)},
+            "receipt": {
+                "status": "rejected",
+                "resource_urn": f"urn:dockuri:run:connector-{rec.app}:{req_id}",
+                "driver": "connector",
+                "artifacts": [],
+            },
+        }
+
+
 def _invoke_single(clean_uri: str, params: dict[str, Any], socket_path: str | None = None) -> dict[str, Any]:
     if clean_uri in _CUSTOM_URI_HANDLERS:
         return _CUSTOM_URI_HANDLERS[clean_uri](params)
@@ -324,7 +413,7 @@ def _invoke_single(clean_uri: str, params: dict[str, Any], socket_path: str | No
         }
 
     # Fast path: check if project-local manifest defines this process
-    proj_dir = params.get("project") or params.get("project_root") or params.get("root")
+    proj_dir = params.pop("proj_path", None) or params.get("project") or params.get("project_root") or params.get("root")
     proj_path_resolved: Path | None = None
     if proj_dir:
         p_path = Path(str(proj_dir)).expanduser()
@@ -438,6 +527,30 @@ def _invoke_single(clean_uri: str, params: dict[str, Any], socket_path: str | No
         if isinstance(res, dict) and "status" not in res:
             res = {"status": "error" if res.get("ok") is False else "ok", **res}
         return res
+
+    # Check registered connector procedures with semantic routes before external fallbacks
+    try:
+        from .dockuri_registry import get_cached_registry
+        reg = get_cached_registry(proj_path_resolved or Path.cwd())
+        proc_rec = reg.get(clean_uri)
+        if proc_rec is None:
+            for cdir in (
+                Path.home() / "github" / "subactor" / "connectors",
+                Path.home() / "github" / "urirun-connectors",
+                Path("/home/tom/github/subactor/connectors"),
+                Path("/home/tom/github/urirun-connectors"),
+            ):
+                if cdir.is_dir():
+                    creg = get_cached_registry(cdir)
+                    proc_rec = creg.get(clean_uri)
+                    if proc_rec is not None:
+                        break
+        if proc_rec is not None and getattr(proc_rec, "semantic_route", None):
+            conn_res = _dispatch_connector(proc_rec, clean_uri, params)
+            if conn_res is not None:
+                return conn_res
+    except Exception:
+        pass
 
     for cand in (
         Path.home() / "github" / "dockuri" / "dockuri" / "python",
