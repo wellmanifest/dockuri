@@ -47,3 +47,15 @@ def test_builtin_services_alone_do_not_make_project_ready(tmp_path: Path) -> Non
     assert rd["descriptor_type"] == "builtin-only"
     assert rd["project_procedures_count"] == 0
     assert rd["builtin_procedures_count"] > 0
+
+
+def test_registered_connector_hierarchical_semantic_route_dispatch() -> None:
+    # Issue #200: Reconcile registered Dockuri connector URIs with canonical dispatch
+    target_uri = "proc://subactor-account-twin/subactor/account/query/sources/v1"
+    res = uri(target_uri, {})
+    assert isinstance(res, dict)
+    assert res.get("uri") == target_uri
+    assert res.get("semantic_route") == "twin://subactor/account/query/sources"
+    assert "receipt" in res
+    assert res["receipt"]["driver"] == "connector"
+    assert res.get("error", {}).get("code") != "INVALID_URI"
